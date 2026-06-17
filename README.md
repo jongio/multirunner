@@ -100,13 +100,17 @@ Prebuilt binaries are published for **Linux, Windows, and macOS**, each in
 2. **Run it:**
 
    ```sh
-   export GITHUB_PAT=...
+   export GITHUB_PAT=...            # or put GITHUB_PAT=... in a .env file
    multirunner run --config config.yaml
    ```
 
 That's it. The runner image is pulled automatically (no build step), and your
 runners appear under **Settings → Actions → Runners**. Push a workflow with
 `runs-on: [self-hosted, linux, x64]` and watch them pick up jobs.
+
+> `${VAR}` config references resolve from the environment, and from a `.env` file
+> (the config's directory, then the working dir) — so `GITHUB_PAT=ghp_…` in `.env`
+> is enough; real environment variables take precedence.
 
 > **No PAT?** `multirunner connect --repo owner/name --config config.yaml` creates
 > and installs a GitHub App via a browser flow and writes the credentials for you.
