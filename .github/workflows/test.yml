@@ -1,0 +1,100 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Unit tests + vet on every supported OS.
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test ./...
+
+  # Race detector (needs CGO + a C toolchain, available on ubuntu runners).
+  race:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./... -race
+
+  # Compile every release target so a cross-build break fails CI, not the release.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cross-compile all targets
+        run: |
+          set -euo pipefail
+          for t in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do
+            os="${t%/*}"; arch="${t#*/}"
+            echo "build $os/$arch"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build ./...
+          done
+
+  # Linux container backend against the runner's real Docker daemon.
+  docker-integration:
+    runs-on: ubuntu-latest
+    env:
+      MULTIRUNNER_TEST_DOCKER_HOST: unix:///var/run/docker.sock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Backend integration tests (real Docker daemon)
+        run: go test ./internal/backend/... -v
+
+  # ---------------------------------------------------------------------------
+  # The Windows-container (containerd) and QEMU-VM backends can't run on
+  # GitHub-hosted runners: containerd+runhcs needs a configured Windows-container
+  # host, and QEMU needs /dev/kvm (no nested virt on hosted runners). Enable
+  # these by registering a self-hosted runner with the matching labels.
+  # ---------------------------------------------------------------------------
+  qemu-integration:
+    # Needs a self-hosted Linux/KVM runner (label: qemu). Skipped otherwise.
+    runs-on: [self-hosted, linux, qemu]
+    if: false   # flip to true once a self-hosted KVM runner is registered
+    env:
+      MULTIRUNNER_TEST_QEMU: "1"
+      MULTIRUNNER_TEST_ACCEL: kvm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./internal/winvm/... -v
+
+  windows-containers:
+    # Needs a self-hosted Windows host with containerd + runhcs (label: containerd).
+    runs-on: [self-hosted, windows, containerd]
+    if: false   # flip to true once a self-hosted Windows-container runner exists
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./internal/backend/... -v
