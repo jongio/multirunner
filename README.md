@@ -79,44 +79,40 @@ Prebuilt binaries are published for **Linux, Windows, and macOS**, each in
 
 ## Quick start (Linux)
 
-1. **Get a runner image.** Pull the prebuilt one:
+1. **Write a tiny config** (`config.yaml`):
 
-   ```sh
-   docker pull gerardsmit/multirunner-runner-linux:latest
+   ```yaml
+   github:
+     scope: repo
+     owner: my-user
+     repo: my-repo
+   auth:
+     pat: "${GITHUB_PAT}"        # export GITHUB_PAT=... (or use `connect`, below)
+   pools:
+     - name: linux
+       os: linux
+       size: 3
+       labels: [self-hosted, linux, x64]
+       docker:
+         host: "tcp://127.0.0.1:2375"   # your Docker/Podman endpoint
    ```
 
-   …or build it yourself (build context = repo root):
+2. **Run it:**
 
    ```sh
-   docker build -f images/linux/Dockerfile -t multirunner/runner-linux:dev .
+   export GITHUB_PAT=...
+   multirunner run --config config.yaml
    ```
 
-   Published images (built + pushed by CI on each release):
-   `gerardsmit/multirunner-runner-linux`, `gerardsmit/multirunner-runner-windows`,
-   `gerardsmit/multirunner-cacheserver` — Linux images are multi-arch (amd64 + arm64).
+That's it. The runner image is pulled automatically (no build step), and your
+runners appear under **Settings → Actions → Runners**. Push a workflow with
+`runs-on: [self-hosted, linux, x64]` and watch them pick up jobs.
 
-2. **Connect to GitHub.** `connect` creates and installs a GitHub App for your
-   org/repo via a browser flow and writes the credentials to your config — no
-   hand-made tokens:
+> **No PAT?** `multirunner connect --repo owner/name --config config.yaml` creates
+> and installs a GitHub App via a browser flow and writes the credentials for you.
 
-   ```sh
-   multirunner connect --org my-org --config config.local.yaml
-   # or repo-scoped:
-   multirunner connect --repo owner/name --config config.local.yaml
-   ```
-
-   Prefer a token? Put `pat: "${GITHUB_PAT}"` in the config (resolved from the
-   environment, stays off disk) and `export GITHUB_PAT=...`.
-
-3. **Run it:**
-
-   ```sh
-   multirunner run --config config.local.yaml
-   ```
-
-Your runners appear under **Settings → Actions → Runners**. Push a workflow with
-`runs-on: [self-hosted, linux, x64]` and watch them pick up jobs. Start with
-`config.example.yaml` — it documents every option.
+`config.example.yaml` documents every option (cache, autoscaling, tiers, …) when
+you want to go further.
 
 ---
 
@@ -131,15 +127,14 @@ pools:
   - name: linux-pool
     os: linux
     size: 3
-    image: "multirunner/runner-linux:dev"
     labels: [self-hosted, linux, x64]
     docker:
       host: "tcp://127.0.0.1:2375"            # Docker (WSL2)
       # host: "npipe:////./pipe/podman-machine-default"   # Podman on Windows
 ```
 
-On Podman, prefix local image tags with `localhost/` (e.g.
-`localhost/multirunner/runner-linux:dev`) so the daemon resolves them.
+The image defaults to the published `gerardsmit/multirunner-runner-linux:latest`
+and is pulled automatically. Set `image:` only to use your own.
 
 ### Windows containers (containerd, no Docker Desktop)
 

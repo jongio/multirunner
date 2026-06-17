@@ -111,10 +111,10 @@ func TestImageRef(t *testing.T) {
 	cases := []struct {
 		os, tier, explicit, want string
 	}{
-		{"linux", "minimal", "", "multirunner/runner-linux:dev"},
-		{"linux", "", "", "multirunner/runner-linux:dev"},
+		{"linux", "minimal", "", "gerardsmit/multirunner-runner-linux:latest"},
+		{"linux", "", "", "gerardsmit/multirunner-runner-linux:latest"},
 		{"linux", "github-like", "", "multirunner/runner-linux-github-like:dev"},
-		{"windows", "minimal", "", "multirunner/runner-windows:dev"},
+		{"windows", "minimal", "", "gerardsmit/multirunner-runner-windows:latest"},
 		{"linux", "minimal", "ghcr.io/me/x:1", "ghcr.io/me/x:1"},
 	}
 	for _, c := range cases {

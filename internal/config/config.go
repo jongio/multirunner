@@ -144,7 +144,9 @@ func (p Pool) ImageRef() string {
 	}
 	tier := p.ImageTier
 	if tier == "" || tier == "minimal" {
-		return "multirunner/runner-" + p.OS + ":dev"
+		// Published image (built + pushed by CI), auto-pulled on first run — no
+		// local build needed for the common case.
+		return "gerardsmit/multirunner-runner-" + p.OS + ":latest"
 	}
 	return "multirunner/runner-" + p.OS + "-" + tier + ":dev"
 }
