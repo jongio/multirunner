@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -128,6 +129,21 @@ func TestImageRef(t *testing.T) {
 		if got := p.ImageRef(); got != c.want {
 			t.Errorf("ImageRef(os=%s tier=%s explicit=%s) = %q, want %q", c.os, c.tier, c.explicit, got, c.want)
 		}
+	}
+}
+
+func TestWarningsQEMUImageTier(t *testing.T) {
+	c := &Config{Pools: []Pool{
+		{Name: "vm", Backend: "qemu", ImageTier: "dotnet"},
+		{Name: "vm-ok", Backend: "qemu", ImageTier: "minimal"},
+		{Name: "docker", ImageTier: "dotnet"},
+	}}
+	w := c.Warnings()
+	if len(w) != 1 {
+		t.Fatalf("warnings = %v, want 1 (only the qemu+image_tier pool)", w)
+	}
+	if !strings.Contains(w[0], "vm") || !strings.Contains(w[0], "qemu") {
+		t.Errorf("unexpected warning: %q", w[0])
 	}
 }
 

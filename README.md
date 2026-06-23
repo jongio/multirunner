@@ -227,7 +227,15 @@ reads its JIT config from an attached ISO, runs one job, and powers off.
 
 ```sh
 multirunner bake --iso WinServer2022Eval.iso --golden /var/lib/multirunner/golden.qcow2
+# bake toolchains into the golden (the VM equivalent of container flavors):
+multirunner bake --iso WinServer2022Eval.iso --golden golden.qcow2 --tools dotnet,node,buildtools
 ```
+
+The QEMU backend boots the baked golden image and **ignores `image`/`image_tier`**
+(those only apply to container backends — multirunner warns if you set them on a
+qemu pool). To give a VM runner toolchains, bake them in with `--tools`
+(`dotnet`, `node`, `go`, `buildtools` = VS 2022 Build Tools). List the same tools
+under `qemu.tools` so an auto-rebuild reuses them; changing the set re-bakes.
 
 ```yaml
 pools:
@@ -241,6 +249,7 @@ pools:
       mem_mb: 4096
       cpus: 2
       accel: kvm           # kvm (Linux) | whpx (Windows) | hvf (macOS) | "" auto
+      tools: [dotnet, node, buildtools]   # bake these into the golden on rebuild
 ```
 
 Highlights:

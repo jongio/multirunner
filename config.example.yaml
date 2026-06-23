@@ -106,6 +106,10 @@ pools:
       mem_mb: 4096
       cpus: 2
       accel: ""                  # "" = auto: kvm (Linux) / whpx (Windows) / hvf (macOS)
+      # Toolchains baked into the golden (the VM equivalent of image_tier; qemu
+      # ignores image/image_tier). Options: dotnet | node | go | buildtools.
+      # Match `multirunner bake --tools ...`; changing the set forces a rebuild.
+      # tools: [dotnet, node, buildtools]
 
   - name: windows-pool
     os: windows

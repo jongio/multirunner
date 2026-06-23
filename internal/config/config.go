@@ -196,9 +196,10 @@ type QEMU struct {
 	CPUs    int    `yaml:"cpus"`
 	Accel   string `yaml:"accel"` // "" = auto (kvm/whpx/hvf)
 	// Housekeeping (golden eval license + rebuilds):
-	BakeISO       string `yaml:"bake_iso"`       // Windows ISO for rebuilds (enables auto-rebuild)
-	RunnerVersion string `yaml:"runner_version"` // runner version to bake
-	Licensed      bool   `yaml:"licensed"`       // real key/KMS -> skip eval housekeeping
+	BakeISO       string   `yaml:"bake_iso"`       // Windows ISO for rebuilds (enables auto-rebuild)
+	RunnerVersion string   `yaml:"runner_version"` // runner version to bake
+	Licensed      bool     `yaml:"licensed"`       // real key/KMS -> skip eval housekeeping
+	Tools         []string `yaml:"tools"`          // toolchains to bake into the golden: dotnet | node | go | buildtools
 }
 
 // Containerd configures the containerd/runhcs Windows-container backend. The
@@ -348,6 +349,23 @@ func (c *Config) applyDefaults() {
 			p.Docker.Isolation = "process"
 		}
 	}
+}
+
+// Warnings returns non-fatal configuration smells worth surfacing at startup.
+// Unlike Validate (which rejects broken configs), these are settings that are
+// silently ineffective — e.g. an image flavor on a QEMU pool, which boots a
+// baked golden image and ignores image/image_tier entirely.
+func (c *Config) Warnings() []string {
+	var w []string
+	for i := range c.Pools {
+		p := &c.Pools[i]
+		if p.Backend == "qemu" && (p.Image != "" || (p.ImageTier != "" && p.ImageTier != "minimal")) {
+			w = append(w, fmt.Sprintf(
+				"pool %q: backend=qemu ignores image/image_tier (it boots the baked golden image); "+
+					"bake toolchains into the golden instead (multirunner bake --tools ...)", p.Name))
+		}
+	}
+	return w
 }
 
 // Validate checks required fields and cross-field consistency.
