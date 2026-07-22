@@ -77,6 +77,14 @@ auth: {pat: x}
 pools:
   - {name: p, os: linux, docker: {host: h}}
   - {name: p, os: windows, docker: {host: h2}}`,
+		"repos without repos list": `
+github: {scope: repos, owner: o}
+auth: {pat: x}
+pools: [{name: p, os: linux, docker: {host: h}}]`,
+		"repos without owner": `
+github: {scope: repos, repos: [a, b]}
+auth: {pat: x}
+pools: [{name: p, os: linux, docker: {host: h}}]`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -236,5 +244,68 @@ pools: [{name: p, os: linux, docker: {host: h}}]`)
 	}
 	if !c.Auth.IsApp() {
 		t.Error("IsApp = false, want true")
+	}
+}
+
+func TestScopeReposValid(t *testing.T) {
+	p := writeConfig(t, `
+github:
+  scope: repos
+  owner: jongio
+  repos: [repo-a, repo-b, repo-c]
+auth:
+  pat: ghp_x
+pools:
+  - name: linux-pool
+    os: linux
+    docker:
+      host: tcp://127.0.0.1:2375
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.GitHub.Scope != ScopeRepos {
+		t.Errorf("scope = %q, want repos", c.GitHub.Scope)
+	}
+	if c.GitHub.Owner != "jongio" {
+		t.Errorf("owner = %q", c.GitHub.Owner)
+	}
+	if len(c.GitHub.Repos) != 3 {
+		t.Fatalf("repos = %v, want 3 entries", c.GitHub.Repos)
+	}
+	if c.GitHub.Repos[0] != "repo-a" || c.GitHub.Repos[2] != "repo-c" {
+		t.Errorf("repos = %v", c.GitHub.Repos)
+	}
+}
+
+func TestScopeReposWarnsOnRepoField(t *testing.T) {
+	p := writeConfig(t, `
+github:
+  scope: repos
+  owner: o
+  repo: stale
+  repos: [a, b]
+auth:
+  pat: ghp_x
+pools:
+  - name: p
+    os: linux
+    docker:
+      host: h
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	w := c.Warnings()
+	found := false
+	for _, msg := range w {
+		if strings.Contains(msg, "github.repo is ignored") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected warning about github.repo being ignored, got %v", w)
 	}
 }

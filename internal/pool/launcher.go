@@ -31,7 +31,7 @@ type Launcher struct {
 	cfg    config.Pool
 	image  string
 	be     backend.Backend
-	gh     *github.Client
+	gh     github.ClientProvider
 	env    map[string]string
 	mounts []backend.Mount
 	logger *slog.Logger
@@ -39,7 +39,7 @@ type Launcher struct {
 }
 
 // NewLauncher builds a Launcher.
-func NewLauncher(cfg config.Pool, image string, be backend.Backend, gh *github.Client, env map[string]string, mounts []backend.Mount, logger *slog.Logger, hooks Hooks) *Launcher {
+func NewLauncher(cfg config.Pool, image string, be backend.Backend, gh github.ClientProvider, env map[string]string, mounts []backend.Mount, logger *slog.Logger, hooks Hooks) *Launcher {
 	return &Launcher{
 		cfg: cfg, image: image, be: be, gh: gh,
 		env: env, mounts: mounts, logger: logger.With("pool", cfg.Name), hooks: hooks,
@@ -69,6 +69,7 @@ func (l *Launcher) RunOne(ctx context.Context) (int, error) {
 	if l.hooks.OnStart != nil {
 		l.hooks.OnStart(l.cfg.Name)
 	}
+	client := l.gh.NextClient()
 	spec := runner.Spec{
 		Name:          l.runnerName(),
 		Image:         l.image,
@@ -78,7 +79,7 @@ func (l *Launcher) RunOne(ctx context.Context) (int, error) {
 		Env:           l.env,
 		Mounts:        l.mounts,
 	}
-	code, err := runner.RunOnce(ctx, l.gh, l.be, spec, l.logger)
+	code, err := runner.RunOnce(ctx, client, l.be, spec, l.logger)
 	if l.hooks.OnStop != nil {
 		l.hooks.OnStop(l.cfg.Name, code, err)
 	}

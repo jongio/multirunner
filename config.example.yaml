@@ -2,9 +2,13 @@
 
 github:
   url: "https://github.com"      # change for GHES
-  scope: "org"                   # repo | org | enterprise
-  owner: "myorg"                 # org name (org) | repo owner (repo) | enterprise slug (enterprise)
+  scope: "org"                   # repo | repos | org | enterprise
+  owner: "myorg"                 # org name (org) | repo owner (repo/repos) | enterprise slug (enterprise)
   repo: "myrepo"                 # only for scope=repo
+  # repos:                       # only for scope=repos (multiple personal repos, one instance)
+  #   - repo-one
+  #   - repo-two
+  #   - repo-three
 
 auth:
   pat: "${GITHUB_PAT}"           # ${ENV} refs are resolved from the environment (keeps secrets off disk)

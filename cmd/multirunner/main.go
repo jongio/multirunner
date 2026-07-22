@@ -406,13 +406,36 @@ func runOrchestrator(ctx context.Context, configPath string, interactive, instal
 		logger.Warn(warn)
 	}
 
-	ghClient, err := github.New(ctx, cfg.GitHub, cfg.Auth)
-	if err != nil {
-		return fmt.Errorf("github client: %w", err)
+	// Build the GitHub client provider. For scope=repos, create a per-repo
+	// client for each listed repo and wrap them in a round-robin RepoSet.
+	var ghProvider github.ClientProvider
+	if cfg.GitHub.Scope == config.ScopeRepos {
+		clients := make([]*github.Client, len(cfg.GitHub.Repos))
+		for i, repo := range cfg.GitHub.Repos {
+			repoGH := cfg.GitHub
+			repoGH.Scope = config.ScopeRepo
+			repoGH.Repo = repo
+			c, err := github.New(ctx, repoGH, cfg.Auth)
+			if err != nil {
+				return fmt.Errorf("github client for %s/%s: %w", cfg.GitHub.Owner, repo, err)
+			}
+			clients[i] = c
+		}
+		ghProvider = github.NewRepoSet(clients, cfg.GitHub.Repos, cfg.GitHub.Owner)
+		logger.Info("starting",
+			"scope", cfg.GitHub.Scope, "owner", cfg.GitHub.Owner,
+			"repos", len(cfg.GitHub.Repos),
+			"provisioning", cfg.Provisioning, "pools", len(cfg.Pools))
+	} else {
+		ghClient, err := github.New(ctx, cfg.GitHub, cfg.Auth)
+		if err != nil {
+			return fmt.Errorf("github client: %w", err)
+		}
+		ghProvider = ghClient
+		logger.Info("starting",
+			"scope", cfg.GitHub.Scope, "owner", cfg.GitHub.Owner,
+			"provisioning", cfg.Provisioning, "pools", len(cfg.Pools))
 	}
-	logger.Info("starting",
-		"scope", cfg.GitHub.Scope, "owner", cfg.GitHub.Owner,
-		"provisioning", cfg.Provisioning, "pools", len(cfg.Pools))
 
 	runQEMUHousekeeping(ctx, cfg, logger)
 
@@ -459,7 +482,7 @@ func runOrchestrator(ctx context.Context, configPath string, interactive, instal
 
 		env, mounts := poolEnvAndMounts(cfg, pc, sharedEnv, gitMgr, logger)
 		image := pc.ImageRef()
-		launchers = append(launchers, pool.NewLauncher(pc, image, be, ghClient, env, mounts, logger, hooks))
+		launchers = append(launchers, pool.NewLauncher(pc, image, be, ghProvider, env, mounts, logger, hooks))
 		logger.Info("pool ready", "name", pc.Name, "os", pc.OS, "size", pc.Size, "image", image,
 			"dind", pc.Docker.EnableDinD, "tool_cache", pc.ToolCache.Mode, "mounts", len(mounts))
 	}
@@ -475,7 +498,7 @@ func runOrchestrator(ctx context.Context, configPath string, interactive, instal
 
 	logger.Info("orchestrator running", "mode", cfg.Provisioning)
 	if cfg.Provisioning.IsAutoscale() {
-		err = runAutoscale(ctx, cfg, ghClient, launchers, logger)
+		err = runAutoscale(ctx, cfg, ghProvider, launchers, logger)
 	} else {
 		pools := make([]*pool.Pool, len(launchers))
 		for i, l := range launchers {
@@ -516,8 +539,8 @@ func runQEMUHousekeeping(ctx context.Context, cfg *config.Config, logger *slog.L
 
 // runAutoscale runs the on-demand scaler (polling) plus an optional webhook
 // receiver (when webhook.listen is set and reachable from GitHub).
-func runAutoscale(ctx context.Context, cfg *config.Config, ghClient *github.Client, launchers []*pool.Launcher, logger *slog.Logger) error {
-	scaler := autoscale.New(launchers, ghClient, cfg.GitHub.Scope, cfg.Webhook.PollIntervalSec, logger)
+func runAutoscale(ctx context.Context, cfg *config.Config, ghProvider github.ClientProvider, launchers []*pool.Launcher, logger *slog.Logger) error {
+	scaler := autoscale.New(launchers, ghProvider, cfg.GitHub.Scope, cfg.Webhook.PollIntervalSec, logger)
 	if cfg.Webhook.Listen != "" {
 		if cfg.Webhook.Secret == "" {
 			logger.Warn("webhook listener has no secret; signatures will not be verified")
@@ -528,7 +551,7 @@ func runAutoscale(ctx context.Context, cfg *config.Config, ghClient *github.Clie
 				logger.Error("webhook server error", "err", err)
 			}
 		}()
-	} else if cfg.GitHub.Scope != config.ScopeRepo {
+	} else if cfg.GitHub.Scope != config.ScopeRepo && cfg.GitHub.Scope != config.ScopeRepos {
 		logger.Warn("autoscale without a webhook on non-repo scope cannot poll queued jobs; set webhook.listen (behind NAT use a tunnel) or use provisioning: pool")
 	}
 	return scaler.Run(ctx)

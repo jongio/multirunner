@@ -15,6 +15,7 @@ type Scope string
 
 const (
 	ScopeRepo       Scope = "repo"
+	ScopeRepos      Scope = "repos"
 	ScopeOrg        Scope = "org"
 	ScopeEnterprise Scope = "enterprise"
 )
@@ -84,10 +85,11 @@ func (g GitCache) DotGit() bool { return g.Mode == "dotgit-cache" && g.Path != "
 
 // GitHub identifies the target and scope.
 type GitHub struct {
-	URL   string `yaml:"url"`
-	Scope Scope  `yaml:"scope"`
-	Owner string `yaml:"owner"`
-	Repo  string `yaml:"repo"`
+	URL   string   `yaml:"url"`
+	Scope Scope    `yaml:"scope"`
+	Owner string   `yaml:"owner"`
+	Repo  string   `yaml:"repo"`
+	Repos []string `yaml:"repos"` // only for scope=repos: list of repo names under Owner
 }
 
 // Auth holds either a PAT or GitHub App credentials. PAT takes precedence when set.
@@ -357,6 +359,9 @@ func (c *Config) applyDefaults() {
 // baked golden image and ignores image/image_tier entirely.
 func (c *Config) Warnings() []string {
 	var w []string
+	if c.GitHub.Scope == ScopeRepos && c.GitHub.Repo != "" {
+		w = append(w, "github.repo is ignored when scope=repos; use github.repos instead")
+	}
 	for i := range c.Pools {
 		p := &c.Pools[i]
 		if p.Backend == "qemu" && (p.Image != "" || (p.ImageTier != "" && p.ImageTier != "minimal")) {
@@ -375,12 +380,19 @@ func (c *Config) Validate() error {
 		if c.GitHub.Owner == "" || c.GitHub.Repo == "" {
 			return fmt.Errorf("github.owner and github.repo are required for scope=repo")
 		}
+	case ScopeRepos:
+		if c.GitHub.Owner == "" {
+			return fmt.Errorf("github.owner is required for scope=repos")
+		}
+		if len(c.GitHub.Repos) == 0 {
+			return fmt.Errorf("github.repos must list at least one repo for scope=repos")
+		}
 	case ScopeOrg, ScopeEnterprise:
 		if c.GitHub.Owner == "" {
 			return fmt.Errorf("github.owner is required for scope=%s", c.GitHub.Scope)
 		}
 	default:
-		return fmt.Errorf("github.scope must be one of repo|org|enterprise, got %q", c.GitHub.Scope)
+		return fmt.Errorf("github.scope must be one of repo|repos|org|enterprise, got %q", c.GitHub.Scope)
 	}
 
 	if c.Auth.PAT == "" {

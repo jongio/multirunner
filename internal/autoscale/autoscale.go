@@ -16,7 +16,7 @@ import (
 // Scaler launches runners on demand across a set of pool launchers.
 type Scaler struct {
 	states    []*state
-	gh        *github.Client
+	gh        github.ClientProvider
 	scope     config.Scope
 	pollEvery time.Duration
 	logger    *slog.Logger
@@ -29,7 +29,7 @@ type state struct {
 }
 
 // New builds a Scaler. pollSec <= 0 disables API polling (webhook-only).
-func New(launchers []*pool.Launcher, gh *github.Client, scope config.Scope, pollSec int, logger *slog.Logger) *Scaler {
+func New(launchers []*pool.Launcher, gh github.ClientProvider, scope config.Scope, pollSec int, logger *slog.Logger) *Scaler {
 	states := make([]*state, len(launchers))
 	for i, l := range launchers {
 		states[i] = &state{l: l, sem: make(chan struct{}, l.Max())}
@@ -100,9 +100,9 @@ func (s *Scaler) pollLoop(ctx context.Context) {
 	}
 }
 
-// reconcile queries queued work (repo scope) and tops up runners to capacity.
+// reconcile queries queued work (repo/repos scope) and tops up runners to capacity.
 func (s *Scaler) reconcile() {
-	if s.scope != config.ScopeRepo {
+	if s.scope != config.ScopeRepo && s.scope != config.ScopeRepos {
 		return // org/enterprise: rely on webhook (no cheap queued-jobs endpoint)
 	}
 	jobs, err := s.gh.QueuedJobLabels(s.baseCtx)
