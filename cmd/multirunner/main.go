@@ -410,21 +410,25 @@ func runOrchestrator(ctx context.Context, configPath string, interactive, instal
 	// client for each listed repo and wrap them in a round-robin RepoSet.
 	var ghProvider github.ClientProvider
 	if cfg.GitHub.Scope == config.ScopeRepos {
-		clients := make([]*github.Client, len(cfg.GitHub.Repos))
-		for i, repo := range cfg.GitHub.Repos {
+		refs := cfg.GitHub.ResolvedRepos()
+		clients := make([]*github.Client, len(refs))
+		repoLabels := make([]string, len(refs))
+		for i, ref := range refs {
 			repoGH := cfg.GitHub
 			repoGH.Scope = config.ScopeRepo
-			repoGH.Repo = repo
+			repoGH.Owner = ref.Owner
+			repoGH.Repo = ref.Repo
 			c, err := github.New(ctx, repoGH, cfg.Auth)
 			if err != nil {
-				return fmt.Errorf("github client for %s/%s: %w", cfg.GitHub.Owner, repo, err)
+				return fmt.Errorf("github client for %s/%s: %w", ref.Owner, ref.Repo, err)
 			}
 			clients[i] = c
+			repoLabels[i] = ref.Owner + "/" + ref.Repo
 		}
-		ghProvider = github.NewRepoSet(clients, cfg.GitHub.Repos, cfg.GitHub.Owner)
+		ghProvider = github.NewRepoSet(clients, repoLabels)
 		logger.Info("starting",
-			"scope", cfg.GitHub.Scope, "owner", cfg.GitHub.Owner,
-			"repos", len(cfg.GitHub.Repos),
+			"scope", cfg.GitHub.Scope,
+			"repos", repoLabels,
 			"provisioning", cfg.Provisioning, "pools", len(cfg.Pools))
 	} else {
 		ghClient, err := github.New(ctx, cfg.GitHub, cfg.Auth)

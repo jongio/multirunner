@@ -56,7 +56,7 @@ jobs:
             repos:
               - mr-poc-alpha
               - mr-poc-bravo
-              - mr-poc-charlie
+              - ${POC_OWNER}/mr-poc-charlie
           auth:
             pat: "\${GITHUB_PAT}"
           provisioning: pool

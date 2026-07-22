@@ -309,3 +309,86 @@ pools:
 		t.Errorf("expected warning about github.repo being ignored, got %v", w)
 	}
 }
+
+func TestScopeReposMixedOwners(t *testing.T) {
+	p := writeConfig(t, `
+github:
+  scope: repos
+  owner: jongio
+  repos:
+    - repo-a
+    - repo-b
+    - otheruser/repo-c
+auth:
+  pat: ghp_x
+pools:
+  - name: linux-pool
+    os: linux
+    docker:
+      host: tcp://127.0.0.1:2375
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	refs := c.GitHub.ResolvedRepos()
+	if len(refs) != 3 {
+		t.Fatalf("ResolvedRepos = %v, want 3 entries", refs)
+	}
+	if refs[0].Owner != "jongio" || refs[0].Repo != "repo-a" {
+		t.Errorf("refs[0] = %+v, want jongio/repo-a", refs[0])
+	}
+	if refs[1].Owner != "jongio" || refs[1].Repo != "repo-b" {
+		t.Errorf("refs[1] = %+v, want jongio/repo-b", refs[1])
+	}
+	if refs[2].Owner != "otheruser" || refs[2].Repo != "repo-c" {
+		t.Errorf("refs[2] = %+v, want otheruser/repo-c", refs[2])
+	}
+}
+
+func TestScopeReposNoOwnerWithFullPaths(t *testing.T) {
+	p := writeConfig(t, `
+github:
+  scope: repos
+  repos:
+    - alice/repo-x
+    - bob/repo-y
+auth:
+  pat: ghp_x
+pools:
+  - name: p
+    os: linux
+    docker:
+      host: h
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v (full paths should not require owner)", err)
+	}
+	refs := c.GitHub.ResolvedRepos()
+	if refs[0].Owner != "alice" || refs[0].Repo != "repo-x" {
+		t.Errorf("refs[0] = %+v", refs[0])
+	}
+	if refs[1].Owner != "bob" || refs[1].Repo != "repo-y" {
+		t.Errorf("refs[1] = %+v", refs[1])
+	}
+}
+
+func TestParseRepoRef(t *testing.T) {
+	cases := []struct {
+		entry, defaultOwner string
+		wantOwner, wantRepo string
+	}{
+		{"my-repo", "jongio", "jongio", "my-repo"},
+		{"other/their-repo", "jongio", "other", "their-repo"},
+		{"other/their-repo", "", "other", "their-repo"},
+		{"bare-name", "", "", "bare-name"},
+	}
+	for _, tc := range cases {
+		ref := ParseRepoRef(tc.entry, tc.defaultOwner)
+		if ref.Owner != tc.wantOwner || ref.Repo != tc.wantRepo {
+			t.Errorf("ParseRepoRef(%q, %q) = %+v, want %s/%s",
+				tc.entry, tc.defaultOwner, ref, tc.wantOwner, tc.wantRepo)
+		}
+	}
+}

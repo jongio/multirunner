@@ -89,7 +89,31 @@ type GitHub struct {
 	Scope Scope    `yaml:"scope"`
 	Owner string   `yaml:"owner"`
 	Repo  string   `yaml:"repo"`
-	Repos []string `yaml:"repos"` // only for scope=repos: list of repo names under Owner
+	Repos []string `yaml:"repos"` // only for scope=repos: "repo" or "owner/repo"
+}
+
+// RepoRef is a resolved owner/repo pair from the repos list.
+type RepoRef struct {
+	Owner string
+	Repo  string
+}
+
+// ParseRepoRef splits a repos entry into owner and repo. If the entry contains
+// a slash, it is treated as "owner/repo". Otherwise the default owner is used.
+func ParseRepoRef(entry, defaultOwner string) RepoRef {
+	if i := strings.IndexByte(entry, '/'); i > 0 && i < len(entry)-1 {
+		return RepoRef{Owner: entry[:i], Repo: entry[i+1:]}
+	}
+	return RepoRef{Owner: defaultOwner, Repo: entry}
+}
+
+// ResolvedRepos returns each repos entry parsed into owner/repo pairs.
+func (gh GitHub) ResolvedRepos() []RepoRef {
+	refs := make([]RepoRef, len(gh.Repos))
+	for i, entry := range gh.Repos {
+		refs[i] = ParseRepoRef(entry, gh.Owner)
+	}
+	return refs
 }
 
 // Auth holds either a PAT or GitHub App credentials. PAT takes precedence when set.
@@ -381,11 +405,15 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("github.owner and github.repo are required for scope=repo")
 		}
 	case ScopeRepos:
-		if c.GitHub.Owner == "" {
-			return fmt.Errorf("github.owner is required for scope=repos")
-		}
 		if len(c.GitHub.Repos) == 0 {
 			return fmt.Errorf("github.repos must list at least one repo for scope=repos")
+		}
+		// owner is optional when every entry uses explicit "owner/repo" format.
+		for _, entry := range c.GitHub.Repos {
+			ref := ParseRepoRef(entry, c.GitHub.Owner)
+			if ref.Owner == "" {
+				return fmt.Errorf("github.owner is required (or use owner/repo format) for repos entry %q", entry)
+			}
 		}
 	case ScopeOrg, ScopeEnterprise:
 		if c.GitHub.Owner == "" {

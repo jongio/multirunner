@@ -35,7 +35,7 @@ func TestRepoSetRoundRobin(t *testing.T) {
 		repos[i] = "repo" + string(rune('A'+i))
 		clients[i] = &Client{scope: config.ScopeRepo, owner: "o", repo: repos[i]}
 	}
-	rs := NewRepoSet(clients, repos, "o")
+	rs := NewRepoSet(clients, repos)
 
 	if rs.Scope() != config.ScopeRepos {
 		t.Errorf("Scope = %q, want repos", rs.Scope())
@@ -63,7 +63,7 @@ func TestRepoSetRoundRobinConcurrent(t *testing.T) {
 		repos[i] = "repo" + string(rune('0'+i))
 		clients[i] = &Client{scope: config.ScopeRepo, owner: "o", repo: repos[i]}
 	}
-	rs := NewRepoSet(clients, repos, "o")
+	rs := NewRepoSet(clients, repos)
 
 	const goroutines = 100
 	var wg sync.WaitGroup
@@ -119,8 +119,7 @@ func TestRepoSetQueuedJobLabels(t *testing.T) {
 
 	rs := NewRepoSet(
 		[]*Client{makeClient("repoA"), makeClient("repoB")},
-		[]string{"repoA", "repoB"},
-		"o",
+		[]string{"o/repoA", "o/repoB"},
 	)
 
 	labels, err := rs.QueuedJobLabels(context.Background())
@@ -155,8 +154,7 @@ func TestRepoSetQueuedJobLabelsPartialFailure(t *testing.T) {
 
 	rs := NewRepoSet(
 		[]*Client{makeClient("bad"), makeClient("good")},
-		[]string{"bad", "good"},
-		"o",
+		[]string{"o/bad", "o/good"},
 	)
 
 	// Should not error even though "bad" repo fails.

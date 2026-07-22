@@ -36,16 +36,15 @@ func (c *Client) NextClient() *Client { return c }
 // across them via atomic round-robin. It is the ClientProvider for scope=repos.
 type RepoSet struct {
 	clients []*Client
-	repos   []string // repo names, same order as clients
-	owner   string
+	repos   []string // "owner/repo" labels, same order as clients
 	counter atomic.Uint64
 	mu      sync.Mutex // protects nothing currently; reserved for future expansion
 }
 
 // NewRepoSet builds a RepoSet from a list of per-repo clients. The repos slice
-// provides human-readable names for logging (same length/order as clients).
-func NewRepoSet(clients []*Client, repos []string, owner string) *RepoSet {
-	return &RepoSet{clients: clients, repos: repos, owner: owner}
+// provides "owner/repo" labels for logging (same length/order as clients).
+func NewRepoSet(clients []*Client, repos []string) *RepoSet {
+	return &RepoSet{clients: clients, repos: repos}
 }
 
 // NextClient returns the next *Client in round-robin order. Thread-safe.
