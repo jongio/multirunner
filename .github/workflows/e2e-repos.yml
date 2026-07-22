@@ -24,7 +24,7 @@ jobs:
   # POC repos, dispatch e2e-target-linux.yml on each, assert all succeed.
   # -------------------------------------------------------------------------
   e2e-linux:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -166,7 +166,7 @@ jobs:
   # Requires a self-hosted Windows runner with Docker (process isolation).
   # -------------------------------------------------------------------------
   e2e-windows:
-    runs-on: [self-hosted, windows, x64]
+    runs-on: windows-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
