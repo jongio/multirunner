@@ -24,7 +24,7 @@ jobs:
   # POC repos, dispatch e2e-target-linux.yml on each, assert all succeed.
   # -------------------------------------------------------------------------
   e2e-linux:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
