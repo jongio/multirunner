@@ -1,0 +1,318 @@
+# E2E: scope=repos — register runners across multiple private repos.
+#
+# Builds multirunner from this branch (feat/multi-repo-scope), configures
+# scope=repos targeting 3 private POC repos, provisions ephemeral runners,
+# and dispatches workloads on each.
+#
+# Requires secret MR_E2E_PAT with repo + admin:org scopes on all target repos.
+# Manual trigger only.
+name: e2e-repos
+
+on:
+  workflow_dispatch:
+
+env:
+  POC_REPOS: "mr-poc-alpha,mr-poc-bravo,mr-poc-charlie"
+  POC_OWNER: "jongio"
+  GITHUB_PAT: ${{ secrets.MR_E2E_PAT }}
+  GH_TOKEN: ${{ secrets.MR_E2E_PAT }}
+  IMAGE: gerardsmit/multirunner-runner-linux:latest
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Linux: boot multirunner on ubuntu, register Linux runners against all 3
+  # POC repos, dispatch e2e-target-linux.yml on each, assert all succeed.
+  # -------------------------------------------------------------------------
+  e2e-linux:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Guard — secret present
+        run: |
+          if [ -z "${GITHUB_PAT}" ]; then
+            echo "::error::MR_E2E_PAT secret is not set"
+            exit 1
+          fi
+
+      - name: Build multirunner
+        run: go build -o multirunner ./cmd/multirunner
+
+      - name: Pull runner image
+        run: docker pull "$IMAGE"
+
+      - name: Write repos config
+        run: |
+          cat > e2e-repos.yaml <<EOF
+          github:
+            scope: repos
+            owner: ${POC_OWNER}
+            repos:
+              - mr-poc-alpha
+              - mr-poc-bravo
+              - ${POC_OWNER}/mr-poc-charlie
+          auth:
+            pat: "\${GITHUB_PAT}"
+          provisioning: pool
+          cache:
+            enabled: false
+          git_cache:
+            mode: "off"
+          pools:
+            - name: linux-pool
+              os: linux
+              size: 3
+              image: "${IMAGE}"
+              labels: [self-hosted, linux, x64]
+              docker:
+                host: "unix:///var/run/docker.sock"
+          log:
+            level: debug
+            format: text
+          EOF
+          echo "=== config ==="
+          cat e2e-repos.yaml
+
+      - name: Start multirunner
+        run: |
+          ./multirunner run --config e2e-repos.yaml > mr.log 2>&1 &
+          echo $! > mr.pid
+          echo "multirunner PID: $(cat mr.pid)"
+
+      - name: Wait for runners to register
+        run: |
+          set -euo pipefail
+          api() { curl -fsSL -H "Authorization: token ${GITHUB_PAT}" -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
+
+          echo "waiting for self-hosted runners on all POC repos..."
+          IFS=',' read -ra REPOS <<< "$POC_REPOS"
+          for repo in "${REPOS[@]}"; do
+            echo "checking ${POC_OWNER}/${repo}..."
+            for i in $(seq 1 40); do
+              online=$(api "https://api.github.com/repos/${POC_OWNER}/${repo}/actions/runners" \
+                | jq -r '[.runners[] | select(.status=="online")] | length')
+              [ "${online:-0}" -ge 1 ] && { echo "  runner online on ${repo}"; break; }
+              sleep 5
+            done
+            if [ "${online:-0}" -lt 1 ]; then
+              echo "::error::no runner came online for ${repo}"
+              cat mr.log
+              exit 1
+            fi
+          done
+          echo "all repos have at least one runner online"
+
+      - name: Dispatch Linux workloads
+        run: |
+          set -euo pipefail
+          api() { curl -fsSL -H "Authorization: token ${GITHUB_PAT}" -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
+
+          IFS=',' read -ra REPOS <<< "$POC_REPOS"
+          declare -A BASELINES
+          for repo in "${REPOS[@]}"; do
+            BASELINES[$repo]=$(api "https://api.github.com/repos/${POC_OWNER}/${repo}/actions/workflows/e2e-target-linux.yml/runs?per_page=1" \
+              | jq -r '.workflow_runs[0].id // 0')
+            api -X POST "https://api.github.com/repos/${POC_OWNER}/${repo}/actions/workflows/e2e-target-linux.yml/dispatches" \
+              -d '{"ref":"main"}'
+            echo "dispatched e2e-target-linux.yml on ${repo} (baseline: ${BASELINES[$repo]})"
+          done
+
+          # Wait for all dispatched runs to complete.
+          for repo in "${REPOS[@]}"; do
+            echo "waiting for ${repo}..."
+            runid=0
+            for i in $(seq 1 30); do
+              runid=$(api "https://api.github.com/repos/${POC_OWNER}/${repo}/actions/workflows/e2e-target-linux.yml/runs?per_page=1" \
+                | jq -r '.workflow_runs[0].id // 0')
+              [ "$runid" != "${BASELINES[$repo]}" ] && [ "$runid" != "0" ] && break
+              sleep 5
+            done
+            if [ "$runid" = "${BASELINES[$repo]}" ] || [ "$runid" = "0" ]; then
+              echo "::error::dispatched run not found for ${repo}"
+              exit 1
+            fi
+            echo "  run id: $runid"
+
+            for i in $(seq 1 60); do
+              read -r status conclusion < <(api "https://api.github.com/repos/${POC_OWNER}/${repo}/actions/runs/${runid}" \
+                | jq -r '.status + " " + (.conclusion // "null")')
+              [ "$status" = "completed" ] && break
+              sleep 5
+            done
+            if [ "$conclusion" != "success" ]; then
+              echo "::error::${repo} e2e-target-linux concluded: $conclusion"
+              exit 1
+            fi
+            echo "  ${repo} PASSED"
+          done
+          echo "ALL LINUX E2E PASSED across all repos"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -f mr.pid ]; then kill "$(cat mr.pid)" 2>/dev/null || true; fi
+          echo "=== multirunner log ==="
+          cat mr.log || true
+
+  # -------------------------------------------------------------------------
+  # Windows: boot multirunner on a Windows runner, register Windows runners
+  # against all 3 POC repos, dispatch e2e-target-windows.yml on each.
+  # Requires a self-hosted Windows runner with Docker (process isolation).
+  # -------------------------------------------------------------------------
+  e2e-windows:
+    runs-on: [self-hosted, windows, x64]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Guard — secret present
+        shell: pwsh
+        run: |
+          if (-not $env:GITHUB_PAT) {
+            Write-Error "MR_E2E_PAT secret is not set"
+            exit 1
+          }
+
+      - name: Build multirunner
+        shell: pwsh
+        run: go build -o multirunner.exe ./cmd/multirunner
+
+      - name: Write repos config
+        shell: pwsh
+        run: |
+          @"
+          github:
+            scope: repos
+            owner: ${{ env.POC_OWNER }}
+            repos:
+              - mr-poc-alpha
+              - mr-poc-bravo
+              - mr-poc-charlie
+          auth:
+            pat: "`${GITHUB_PAT}"
+          provisioning: pool
+          cache:
+            enabled: false
+          git_cache:
+            mode: "off"
+          pools:
+            - name: windows-pool
+              os: windows
+              size: 3
+              labels: [self-hosted, windows, x64]
+              docker:
+                host: "npipe:////./pipe/docker_engine"
+                isolation: process
+          log:
+            level: debug
+            format: text
+          "@ | Set-Content -Path e2e-repos.yaml -Encoding UTF8
+          Write-Host "=== config ==="
+          Get-Content e2e-repos.yaml
+
+      - name: Start multirunner
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath .\multirunner.exe `
+            -ArgumentList "run","--config","e2e-repos.yaml" `
+            -RedirectStandardOutput mr.log -RedirectStandardError mr-err.log `
+            -PassThru -NoNewWindow
+          $proc.Id | Set-Content mr.pid
+          Write-Host "multirunner PID: $($proc.Id)"
+
+      - name: Wait for runners to register
+        shell: pwsh
+        run: |
+          $headers = @{
+            "Authorization" = "token $env:GITHUB_PAT"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+          $repos = $env:POC_REPOS -split ","
+          foreach ($repo in $repos) {
+            Write-Host "checking $($env:POC_OWNER)/$repo..."
+            $online = 0
+            for ($i = 0; $i -lt 40; $i++) {
+              $resp = Invoke-RestMethod -Uri "https://api.github.com/repos/$($env:POC_OWNER)/$repo/actions/runners" -Headers $headers
+              $online = ($resp.runners | Where-Object { $_.status -eq "online" }).Count
+              if ($online -ge 1) { Write-Host "  runner online on $repo"; break }
+              Start-Sleep -Seconds 5
+            }
+            if ($online -lt 1) {
+              Write-Error "no runner came online for $repo"
+              Get-Content mr.log -ErrorAction SilentlyContinue
+              exit 1
+            }
+          }
+          Write-Host "all repos have at least one runner online"
+
+      - name: Dispatch Windows workloads
+        shell: pwsh
+        run: |
+          $headers = @{
+            "Authorization" = "token $env:GITHUB_PAT"
+            "X-GitHub-Api-Version" = "2022-11-28"
+            "Content-Type" = "application/json"
+          }
+          $repos = $env:POC_REPOS -split ","
+          $baselines = @{}
+          $runIds = @{}
+
+          # Capture baselines and dispatch
+          foreach ($repo in $repos) {
+            $runs = Invoke-RestMethod -Uri "https://api.github.com/repos/$($env:POC_OWNER)/$repo/actions/workflows/e2e-target-windows.yml/runs?per_page=1" -Headers $headers
+            $baselines[$repo] = if ($runs.workflow_runs.Count -gt 0) { $runs.workflow_runs[0].id } else { 0 }
+            Invoke-RestMethod -Method Post `
+              -Uri "https://api.github.com/repos/$($env:POC_OWNER)/$repo/actions/workflows/e2e-target-windows.yml/dispatches" `
+              -Headers $headers -Body '{"ref":"main"}'
+            Write-Host "dispatched e2e-target-windows.yml on $repo (baseline: $($baselines[$repo]))"
+          }
+
+          # Wait for all runs to complete
+          foreach ($repo in $repos) {
+            Write-Host "waiting for $repo..."
+            $runid = 0
+            for ($i = 0; $i -lt 30; $i++) {
+              $runs = Invoke-RestMethod -Uri "https://api.github.com/repos/$($env:POC_OWNER)/$repo/actions/workflows/e2e-target-windows.yml/runs?per_page=1" -Headers $headers
+              if ($runs.workflow_runs.Count -gt 0) { $runid = $runs.workflow_runs[0].id }
+              if ($runid -ne $baselines[$repo] -and $runid -ne 0) { break }
+              Start-Sleep -Seconds 5
+            }
+            if ($runid -eq $baselines[$repo] -or $runid -eq 0) {
+              Write-Error "dispatched run not found for $repo"
+              exit 1
+            }
+            Write-Host "  run id: $runid"
+
+            for ($i = 0; $i -lt 60; $i++) {
+              $run = Invoke-RestMethod -Uri "https://api.github.com/repos/$($env:POC_OWNER)/$repo/actions/runs/$runid" -Headers $headers
+              if ($run.status -eq "completed") { break }
+              Start-Sleep -Seconds 5
+            }
+            if ($run.conclusion -ne "success") {
+              Write-Error "$repo e2e-target-windows concluded: $($run.conclusion)"
+              exit 1
+            }
+            Write-Host "  $repo PASSED"
+          }
+          Write-Host "ALL WINDOWS E2E PASSED across all repos"
+
+      - name: Cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          $pid = Get-Content mr.pid -ErrorAction SilentlyContinue
+          if ($pid) { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue }
+          Write-Host "=== multirunner log ==="
+          Get-Content mr.log -ErrorAction SilentlyContinue
+          Get-Content mr-err.log -ErrorAction SilentlyContinue
