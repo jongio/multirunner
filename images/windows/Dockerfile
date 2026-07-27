@@ -11,6 +11,7 @@ ARG BASE=mcr.microsoft.com/windows/servercore:ltsc2025
 FROM ${BASE}
 ARG RUNNER_VERSION=2.335.0
 ARG GIT_VERSION=2.47.1
+ARG POWERSHELL_VERSION=7.6.4
 
 SHELL ["powershell", "-NoProfile", "-Command", "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue';"]
 
@@ -24,6 +25,13 @@ RUN Invoke-WebRequest -Uri ('https://github.com/git-for-windows/git/releases/dow
     Expand-Archive -Path git.zip -DestinationPath C:/MinGit; \
     Remove-Item git.zip
 
+# PowerShell 7. GitHub Actions defaults `run:` steps on Windows to `pwsh`, and
+# GitHub-hosted windows runners ship it, so workflows routinely declare
+# `shell: pwsh`. Without it those steps fail with "pwsh: command not found".
+RUN Invoke-WebRequest -Uri ('https://github.com/PowerShell/PowerShell/releases/download/v{0}/PowerShell-{0}-win-x64.zip' -f $env:POWERSHELL_VERSION) -OutFile pwsh.zip; \
+    Expand-Archive -Path pwsh.zip -DestinationPath C:/PowerShell; \
+    Remove-Item pwsh.zip
+
 # Cache redirect patch (same as Linux image).
 COPY images/windows/patch-runner.ps1 C:/patch-runner.ps1
 RUN C:/patch-runner.ps1 -Dll C:/actions-runner/bin/Runner.Worker.dll
@@ -32,9 +40,9 @@ ENV RUNNER_MANUALLY_TRAP_SIG=1 \
     ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT=1 \
     RUNNER_DISABLE_AUTOUPDATE=1
 
-# Prepend MinGit to PATH (keep the existing system PATH).
+# Prepend MinGit and PowerShell 7 to PATH (keep the existing system PATH).
 RUN $p = [Environment]::GetEnvironmentVariable('PATH','Machine'); \
-    [Environment]::SetEnvironmentVariable('PATH', 'C:\MinGit\cmd;C:\MinGit\bin;' + $p, 'Machine')
+    [Environment]::SetEnvironmentVariable('PATH', 'C:\MinGit\cmd;C:\MinGit\bin;C:\PowerShell;' + $p, 'Machine')
 
 COPY images/windows/entrypoint.ps1 C:/entrypoint.ps1
 ENTRYPOINT ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/entrypoint.ps1"]

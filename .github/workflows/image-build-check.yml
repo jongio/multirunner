@@ -58,3 +58,13 @@ jobs:
           B=mr-check-windows
           docker run --rm --entrypoint powershell $B:buildtools -NoProfile -Command \
             "& 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe' -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath"
+
+      - name: Smoke-test shells on PATH
+        shell: bash
+        run: |
+          set -euo pipefail
+          B=mr-check-windows
+          # pwsh is the default shell for `run:` steps on Windows in GitHub
+          # Actions, so it must resolve on PATH or `shell: pwsh` steps fail.
+          docker run --rm --entrypoint cmd $B:minimal /c "where pwsh && where git"
+          docker run --rm --entrypoint pwsh $B:minimal -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
