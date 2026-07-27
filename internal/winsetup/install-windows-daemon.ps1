@@ -24,7 +24,11 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$DockerVersion = '27.3.1',
+    # Deliberately independent of the docker/docker Go SDK pin in go.mod. Both
+    # clients call WithAPIVersionNegotiation, so a newer daemon is fine, while
+    # a data-root written by a newer daemon cannot be served by an older one.
+    # Track the current stable release rather than the SDK version.
+    [string]$DockerVersion = '29.6.2',
     [string]$InstallDir    = 'C:\multirunner-docker',
     [string]$DataRoot      = '',
     [string]$Pipe          = 'npipe:////./pipe/docker_engine_windows',
