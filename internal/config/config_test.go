@@ -392,3 +392,51 @@ func TestParseRepoRef(t *testing.T) {
 		}
 	}
 }
+
+func TestWindowsIsolationNotPinnedByDefaults(t *testing.T) {
+	p := writeConfig(t, `
+github:
+  scope: org
+  owner: myorg
+auth:
+  pat: ghp_x
+pools:
+  - name: windows-pool
+    os: windows
+    docker:
+      host: npipe:////./pipe/docker_engine_windows
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Defaults must leave isolation empty so the backend can resolve it via
+	// autoIsolation(). Pinning "process" here broke Windows client editions,
+	// where process isolation needs an exact host/container build match.
+	if got := c.Pools[0].Docker.Isolation; got != "" {
+		t.Errorf("windows pool isolation = %q, want empty (backend resolves it)", got)
+	}
+}
+
+func TestWindowsIsolationExplicitPreserved(t *testing.T) {
+	p := writeConfig(t, `
+github:
+  scope: org
+  owner: myorg
+auth:
+  pat: ghp_x
+pools:
+  - name: windows-pool
+    os: windows
+    docker:
+      host: npipe:////./pipe/docker_engine_windows
+      isolation: process
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := c.Pools[0].Docker.Isolation; got != "process" {
+		t.Errorf("windows pool isolation = %q, want process", got)
+	}
+}

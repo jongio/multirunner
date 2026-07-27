@@ -242,7 +242,7 @@ type Containerd struct {
 type Docker struct {
 	Host        string `yaml:"host"`
 	EnableDinD  bool   `yaml:"enable_dind"`
-	Isolation   string `yaml:"isolation"`    // process | hyperv (windows)
+	Isolation   string `yaml:"isolation"`    // process | hyperv | auto (default, windows)
 	WindowsDinD string `yaml:"windows_dind"` // off | host-pipe | hyperv
 }
 
@@ -371,9 +371,11 @@ func (c *Config) applyDefaults() {
 		if p.MaxConsecutiveFailures == 0 {
 			p.MaxConsecutiveFailures = 5
 		}
-		if p.OS == "windows" && p.Docker.Isolation == "" {
-			p.Docker.Isolation = "process"
-		}
+		// Windows isolation is intentionally left empty here. The backend
+		// resolves "" / "auto" via autoIsolation() (process on Server, hyperv
+		// on client), matching the containerd backend. Defaulting to "process"
+		// here broke client editions, where process isolation needs an exact
+		// host/image build match.
 	}
 }
 

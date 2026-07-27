@@ -123,7 +123,7 @@ pools:
     work_folder: _work
     docker:
       host: "npipe:////./pipe/docker_engine_windows"
-      isolation: process
+      isolation: auto            # auto (default): process on Server, hyperv on client
       windows_dind: "off"        # off | host-pipe | hyperv
     max_consecutive_failures: 5
 

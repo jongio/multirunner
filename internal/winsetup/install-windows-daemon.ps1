@@ -9,6 +9,12 @@
   Run elevated (Administrator). Enabling the Containers feature may require a reboot.
   Writes a status file + transcript under %ProgramData%\multirunner so the caller
   can report the outcome.
+
+  Isolation defaults to 'auto': process on Windows Server, Hyper-V on client
+  editions. Process isolation needs an exact host/container build match, so
+  forcing it on a client edition leaves containers unable to start.
+
+  The daemon pipe is ACL'd to $Group so non-elevated docker clients can reach it.
 #>
 [CmdletBinding()]
 param(
@@ -16,8 +22,9 @@ param(
     [string]$InstallDir    = 'C:\multirunner-docker',
     [string]$Pipe          = 'npipe:////./pipe/docker_engine_windows',
     [string]$ServiceName   = 'multirunner-dockerd',
-    [ValidateSet('process', 'hyperv')]
-    [string]$Isolation     = 'process'
+    [string]$Group         = 'docker-users',
+    [ValidateSet('process', 'hyperv', 'auto')]
+    [string]$Isolation     = 'auto'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -62,20 +69,57 @@ try {
         Remove-Item $zip -Force
     }
 
-    # 3. daemon.json
+    # 3. Resolve isolation. Process isolation requires an exact host/container
+    # build match and is only generally usable on Windows Server; client
+    # editions (Pro/Enterprise/IoT) must use Hyper-V. Mirrors autoIsolation()
+    # in internal/backend so the daemon default matches what multirunner asks
+    # for per container.
+    if ($Isolation -eq 'auto') {
+        $installType = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' `
+            -Name InstallationType -ErrorAction SilentlyContinue).InstallationType
+        $Isolation = if ($installType -eq 'Server') { 'process' } else { 'hyperv' }
+        Write-Host "Auto-selected isolation: $Isolation (InstallationType=$installType)"
+    }
+
+    # 4. Ensure the pipe-access group exists. Without "group" in daemon.json the
+    # named pipe ACL is Administrators/LocalSystem only, so a non-elevated
+    # `docker -H <pipe> ...` fails with "permission denied". The multirunner
+    # service runs as LocalSystem and is unaffected, but interactive use and
+    # troubleshooting break without this.
+    if (-not (Get-LocalGroup -Name $Group -ErrorAction SilentlyContinue)) {
+        Write-Host "Creating local group $Group ..."
+        New-LocalGroup -Name $Group -Description 'Access to the multirunner Windows docker pipe' | Out-Null
+    }
+    $me = "$env:USERDOMAIN\$env:USERNAME"
+    $inGroup = $false
+    try {
+        $inGroup = [bool](Get-LocalGroupMember -Group $Group -ErrorAction Stop |
+            Where-Object { $_.Name -eq $me })
+    }
+    catch { }
+    if (-not $inGroup) {
+        try {
+            Add-LocalGroupMember -Group $Group -Member $me -ErrorAction Stop
+            Write-Host "Added $me to $Group (sign out and back in for it to take effect)"
+        }
+        catch { Write-Warning "Could not add $me to ${Group}: $($_.Exception.Message)" }
+    }
+
+    # 5. daemon.json
     $cfgDir = Join-Path $InstallDir 'config'
     $dataDir = Join-Path $InstallDir 'data'
     New-Item -ItemType Directory -Force -Path $cfgDir, $dataDir | Out-Null
     $cfgPath = Join-Path $cfgDir 'daemon.json'
     $daemon = [ordered]@{
         hosts       = @($Pipe)
+        group       = $Group
         'exec-opts' = @("isolation=$Isolation")
         'data-root' = $dataDir
     }
     $daemon | ConvertTo-Json | Set-Content -Path $cfgPath -Encoding ascii
     Write-Host "Wrote $cfgPath"
 
-    # 4. Register + start the service
+    # 6. Register + start the service
     if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
         Write-Host "Service $ServiceName already exists; reconfiguring."
         Stop-Service $ServiceName -ErrorAction SilentlyContinue
@@ -88,6 +132,8 @@ try {
 
     Write-Host ''
     Write-Host "Done. Windows dockerd is running on: $Pipe"
+    Write-Host "  isolation: $Isolation"
+    Write-Host "  pipe access group: $Group"
     Set-Status 'ok'
 }
 catch {
