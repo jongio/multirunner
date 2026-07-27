@@ -15,11 +15,18 @@
   forcing it on a client edition leaves containers unable to start.
 
   The daemon pipe is ACL'd to $Group so non-elevated docker clients can reach it.
+
+  DataRoot is where the daemon stores images and containers. It defaults to
+  <InstallDir>\data but is separate from InstallDir on purpose: Windows base
+  images run to several GB each, so the image store often belongs on a
+  different volume than the daemon binaries. Pointing DataRoot at an existing
+  store also lets this service adopt images from a daemon it replaces.
 #>
 [CmdletBinding()]
 param(
     [string]$DockerVersion = '27.3.1',
     [string]$InstallDir    = 'C:\multirunner-docker',
+    [string]$DataRoot      = '',
     [string]$Pipe          = 'npipe:////./pipe/docker_engine_windows',
     [string]$ServiceName   = 'multirunner-dockerd',
     [string]$Group         = 'docker-users',
@@ -107,14 +114,14 @@ try {
 
     # 5. daemon.json
     $cfgDir = Join-Path $InstallDir 'config'
-    $dataDir = Join-Path $InstallDir 'data'
-    New-Item -ItemType Directory -Force -Path $cfgDir, $dataDir | Out-Null
+    if ([string]::IsNullOrWhiteSpace($DataRoot)) { $DataRoot = Join-Path $InstallDir 'data' }
+    New-Item -ItemType Directory -Force -Path $cfgDir, $DataRoot | Out-Null
     $cfgPath = Join-Path $cfgDir 'daemon.json'
     $daemon = [ordered]@{
         hosts       = @($Pipe)
         group       = $Group
         'exec-opts' = @("isolation=$Isolation")
-        'data-root' = $dataDir
+        'data-root' = $DataRoot
     }
     $daemon | ConvertTo-Json | Set-Content -Path $cfgPath -Encoding ascii
     Write-Host "Wrote $cfgPath"
@@ -134,6 +141,7 @@ try {
     Write-Host "Done. Windows dockerd is running on: $Pipe"
     Write-Host "  isolation: $Isolation"
     Write-Host "  pipe access group: $Group"
+    Write-Host "  data-root: $DataRoot"
     Set-Status 'ok'
 }
 catch {

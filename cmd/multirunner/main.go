@@ -128,6 +128,7 @@ for a repo-scoped App.`,
 	connectC.Flags().IntVar(&connPort, "port", 0, "local callback port (0 = auto)")
 	connectC.Flags().StringVar(&connKeyOut, "key-out", "", "path to write the App private key")
 
+	var winDataRoot string
 	winDaemon := &cobra.Command{
 		Use:   "install-windows-daemon",
 		Short: "Install the standalone Windows-container dockerd (elevates)",
@@ -138,20 +139,21 @@ registers the daemon on its own named pipe (npipe:////./pipe/docker_engine_windo
 so it coexists with Podman/Docker Desktop and the WSL Linux daemon. Windows only.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return winsetup.Install()
+			return winsetup.Install(winsetup.InstallOptions{DataRoot: winDataRoot})
 		},
 	}
+	winDaemon.Flags().StringVar(&winDataRoot, "data-root", "",
+		"where the daemon stores images and containers (default <install-dir>\\data); "+
+			"point at an existing store to keep its images")
 
 	installContainerd := &cobra.Command{
 		Use:   "install-containerd",
 		Short: "Install containerd + runhcs + nerdctl for Windows containers (elevates)",
 		Long: `Install containerd, the runhcs shim, nerdctl, and the Windows CNI plugins as
 a service so multirunner can run Windows-container runners (pool backend:
-containerd). This is the supported Windows-container runtime — standalone Moby
-dockerd cannot create Windows containers on client editions. Triggers a UAC
-prompt, enables the Containers + Hyper-V features (may require a reboot), and
-registers containerd on \\.\pipe\containerd-containerd. Process isolation is used
-on Windows Server, Hyper-V isolation on client. Windows only.`,
+containerd). Triggers a UAC prompt, enables the Containers + Hyper-V features
+(may require a reboot), and registers containerd on \\.\pipe\containerd-containerd.
+Process isolation is used on Windows Server, Hyper-V isolation on client. Windows only.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return winsetup.InstallContainerd()
@@ -629,7 +631,7 @@ func maybeInstallWindowsDaemon(pc config.Pool, interactive, installDeps bool, lo
 		}
 	}
 	logger.Info("installing windows container daemon (elevation prompt may appear)")
-	if err := winsetup.Install(); err != nil {
+	if err := winsetup.Install(winsetup.InstallOptions{}); err != nil {
 		return fmt.Errorf("install windows daemon: %w", err)
 	}
 	return nil
