@@ -225,6 +225,21 @@ func (c *Client) queuedJobsForRun(ctx context.Context, runID int64) ([][]string,
 // Scope reports the configured scope.
 func (c *Client) Scope() config.Scope { return c.scope }
 
+// ActionsEnabled reports whether GitHub Actions is enabled on the repo. A repo
+// with Actions switched off accepts runner registrations and reports no queued
+// jobs, exactly like an idle repo, so it is otherwise indistinguishable from one
+// that simply has no work. Requires a repo-scoped client.
+func (c *Client) ActionsEnabled(ctx context.Context) (bool, error) {
+	if c.repo == "" {
+		return false, fmt.Errorf("ActionsEnabled requires a repo-scoped client")
+	}
+	perms, _, err := c.gh.Repositories.GetActionsPermissions(ctx, c.owner, c.repo)
+	if err != nil {
+		return false, fmt.Errorf("get actions permissions %s/%s: %w", c.owner, c.repo, err)
+	}
+	return perms.GetEnabled(), nil
+}
+
 // RepoFilePaths returns every blob path in the repo's default-branch tree. Used
 // by `multirunner detect --repo` to find language markers without a checkout.
 // Requires the client to be repo-scoped (owner + repo set).

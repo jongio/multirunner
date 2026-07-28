@@ -200,3 +200,55 @@ func TestRunnersPath(t *testing.T) {
 		t.Fatal("expected error for unsupported scope")
 	}
 }
+
+func TestActionsEnabled(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"enabled", `{"enabled":true}`, true},
+		{"disabled", `{"enabled":false}`, false},
+		// An omitted field must read as disabled, not as a silent "true".
+		{"omitted", `{}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				w.Header().Set("Content-Type", "application/json")
+				if _, err := io.WriteString(w, tc.body); err != nil {
+					t.Errorf("write: %v", err)
+				}
+			}))
+			defer srv.Close()
+
+			c := newTestClient(t, srv, config.ScopeRepo, "octo", "hello")
+			got, err := c.ActionsEnabled(context.Background())
+			if err != nil {
+				t.Fatalf("ActionsEnabled: %v", err)
+			}
+			if want := "/repos/octo/hello/actions/permissions"; gotPath != want {
+				t.Errorf("path = %q, want %q", gotPath, want)
+			}
+			if got != tc.want {
+				t.Errorf("enabled = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestActionsEnabledRequiresRepoScope pins that org and enterprise clients are
+// rejected rather than silently querying /repos//actions/permissions.
+func TestActionsEnabledRequiresRepoScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request to %s", r.URL.Path)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv, config.ScopeOrg, "myorg", "")
+	if _, err := c.ActionsEnabled(context.Background()); err == nil {
+		t.Fatal("want error for org-scoped client, got nil")
+	}
+}

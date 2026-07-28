@@ -687,11 +687,60 @@ func doctor(configPath string) error {
 		fmt.Printf("[%s] os=%s host=%s image=%s -> %s\n", pc.Name, pc.OS, pc.Docker.Host, pc.ImageRef(), status)
 	}
 	warnStarvedRepos(cfg)
+	if err := checkActionsEnabled(ctx, cfg); err != nil {
+		allOK = false
+	}
 	if !allOK {
 		return fmt.Errorf("preflight found problems")
 	}
 	fmt.Println("\nall pools ready")
 	return nil
+}
+
+// checkActionsEnabled flags configured repos that have GitHub Actions switched
+// off. Such a repo never queues a job, so multirunner polls it every interval
+// forever and the operator sees nothing: no error, no runner, no work. It looks
+// identical to a repo that is merely idle, which is what makes it worth calling
+// out here. Returns an error if any repo is off, so doctor exits non-zero.
+//
+// Only meaningful for scope=repos; org and enterprise scopes have no per-repo
+// list to check. Repos that fail the lookup (deleted, renamed, token missing the
+// scope) are reported but do not fail the run, because that is a token or
+// inventory problem rather than the silent misconfiguration this guards against.
+func checkActionsEnabled(ctx context.Context, cfg *config.Config) error {
+	if cfg.GitHub.Scope != config.ScopeRepos {
+		return nil
+	}
+	var disabled []string
+	for _, ref := range cfg.GitHub.ResolvedRepos() {
+		repoGH := cfg.GitHub
+		repoGH.Scope = config.ScopeRepo
+		repoGH.Owner = ref.Owner
+		repoGH.Repo = ref.Repo
+		name := ref.Owner + "/" + ref.Repo
+
+		c, err := github.New(ctx, repoGH, cfg.Auth)
+		if err != nil {
+			fmt.Printf("\n[%s] could not check Actions: %v\n", name, err)
+			continue
+		}
+		on, err := c.ActionsEnabled(ctx)
+		if err != nil {
+			fmt.Printf("\n[%s] could not check Actions: %v\n", name, err)
+			continue
+		}
+		if !on {
+			disabled = append(disabled, name)
+		}
+	}
+	if len(disabled) == 0 {
+		return nil
+	}
+	fmt.Printf("\nWARNING: Actions is disabled on %d of %d configured repo(s): %s\n"+
+		"        These repos can never queue a job, so multirunner polls them for nothing.\n"+
+		"        fix: enable Actions under Settings > Actions > General, or drop them from github.repos.\n",
+		len(disabled), len(cfg.GitHub.ResolvedRepos()), strings.Join(disabled, ", "))
+	return fmt.Errorf("actions disabled on %d repo(s)", len(disabled))
 }
 
 // warnStarvedRepos flags the one config shape that silently strands work: pool

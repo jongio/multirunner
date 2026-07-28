@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -94,6 +98,88 @@ func TestWarnStarvedReposSilentOutsideReposScope(t *testing.T) {
 		out := captureStdout(t, func() { warnStarvedRepos(cfg) })
 		if out != "" {
 			t.Errorf("scope=%s warned: %q", scope, out)
+		}
+	}
+}
+
+// TestCheckActionsEnabledFlagsDisabledRepos covers the misconfiguration found on
+// this owner's config: six of eleven repos had Actions switched off, so they
+// could never queue a job, yet the scaler polled them every interval and looked
+// exactly like idle repos.
+func TestCheckActionsEnabledFlagsDisabledRepos(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Only o/b has Actions on.
+		on := strings.Contains(r.URL.Path, "/repos/o/b/")
+		if _, err := fmt.Fprintf(w, `{"enabled":%v}`, on); err != nil {
+			t.Errorf("write: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := starvedConfig(config.ProvisioningAutoscale, 3)
+	cfg.GitHub.URL = srv.URL
+	cfg.Auth = config.Auth{PAT: "x"}
+
+	var err error
+	out := captureStdout(t, func() { err = checkActionsEnabled(context.Background(), cfg) })
+	if err == nil {
+		t.Fatal("want error when repos have Actions disabled, got nil")
+	}
+	for _, want := range []string{"WARNING", "2 of 3", "o/a", "o/c", "Settings > Actions"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q: %q", want, out)
+		}
+	}
+	if strings.Contains(out, "o/b,") || strings.Contains(out, ", o/b") {
+		t.Errorf("enabled repo o/b listed as disabled: %q", out)
+	}
+}
+
+func TestCheckActionsEnabledSilentWhenAllEnabled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := io.WriteString(w, `{"enabled":true}`); err != nil {
+			t.Errorf("write: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := starvedConfig(config.ProvisioningAutoscale, 3)
+	cfg.GitHub.URL = srv.URL
+	cfg.Auth = config.Auth{PAT: "x"}
+
+	var err error
+	out := captureStdout(t, func() { err = checkActionsEnabled(context.Background(), cfg) })
+	if err != nil {
+		t.Fatalf("want nil error when all repos enabled, got %v", err)
+	}
+	if out != "" {
+		t.Errorf("warned when all repos enabled: %q", out)
+	}
+}
+
+// TestCheckActionsEnabledSkipsNonReposScope pins that org and enterprise scopes
+// make no API calls: they have no per-repo list to validate.
+func TestCheckActionsEnabledSkipsNonReposScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request to %s", r.URL.Path)
+	}))
+	defer srv.Close()
+
+	for _, scope := range []config.Scope{config.ScopeRepo, config.ScopeOrg, config.ScopeEnterprise} {
+		cfg := starvedConfig(config.ProvisioningAutoscale, 3)
+		cfg.GitHub.Scope = scope
+		cfg.GitHub.URL = srv.URL
+		cfg.Auth = config.Auth{PAT: "x"}
+
+		var err error
+		out := captureStdout(t, func() { err = checkActionsEnabled(context.Background(), cfg) })
+		if err != nil {
+			t.Errorf("scope=%s returned error: %v", scope, err)
+		}
+		if out != "" {
+			t.Errorf("scope=%s produced output: %q", scope, out)
 		}
 	}
 }
