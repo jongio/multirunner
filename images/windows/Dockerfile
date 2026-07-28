@@ -32,9 +32,17 @@ RUN Invoke-WebRequest -Uri ('https://github.com/PowerShell/PowerShell/releases/d
     Expand-Archive -Path pwsh.zip -DestinationPath C:/PowerShell; \
     Remove-Item pwsh.zip
 
-# Cache redirect patch (same as Linux image).
+# Cache redirect patch, kept as a SIDECAR rather than applied in place.
+#
+# The patch stops the runner from overriding ACTIONS_RESULTS_URL /
+# ACTIONS_CACHE_URL, which is only correct when multirunner injects replacements
+# (cache.enabled). Applying it unconditionally leaves ACTIONS_RESULTS_URL unset
+# whenever the cache is off, and actions/upload-artifact then fails with
+# "Unable to get the ACTIONS_RESULTS_URL env variable". entrypoint.ps1 swaps the
+# sidecar in only when a redirect is actually present.
 COPY images/windows/patch-runner.ps1 C:/patch-runner.ps1
-RUN C:/patch-runner.ps1 -Dll C:/actions-runner/bin/Runner.Worker.dll
+RUN Copy-Item C:/actions-runner/bin/Runner.Worker.dll C:/actions-runner/bin/Runner.Worker.dll.mrpatched; \
+    C:/patch-runner.ps1 -Dll C:/actions-runner/bin/Runner.Worker.dll.mrpatched
 
 ENV RUNNER_MANUALLY_TRAP_SIG=1 \
     ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT=1 \

@@ -38,6 +38,20 @@ jobs:
           docker run --rm --entrypoint bash $B:rust          -lc 'rustc --version && cargo --version'
           docker run --rm --entrypoint bash $B:go            -lc 'go version'
 
+      # The cache-redirect patch must live ONLY in the sidecar. If it leaks into
+      # the live DLL, ACTIONS_RESULTS_URL is unset whenever cache.enabled is false
+      # and actions/upload-artifact fails with "Unable to get the
+      # ACTIONS_RESULTS_URL env variable".
+      - name: Verify cache patch is sidecar-only
+        run: |
+          set -euo pipefail
+          B=mr-check-linux
+          docker run --rm --entrypoint bash $B:minimal -lc '
+            set -eu
+            grep -qa "A.C.T.I.O.N.S._.R.E.S.U.L.T.S._.U.R.L" bin/Runner.Worker.dll
+            grep -qa "A.C.T.I.O.N.S._.R.E.S.U.L.T.S._.U.R.X" bin/Runner.Worker.dll.mrpatched
+            ! grep -qa "A.C.T.I.O.N.S._.R.E.S.U.L.T.S._.U.R.X" bin/Runner.Worker.dll
+          '
 
   windows:
     runs-on: windows-2025
@@ -75,6 +89,39 @@ jobs:
             "if not \"%RUNNER_TOOL_CACHE%\"==\"C:\\hostedtoolcache\\windows\" exit 1"
           docker run --rm --entrypoint cmd $B:dotnet /c \
             "if not \"%DOTNET_ROOT%\"==\"C:\\dotnet\" exit 1"
+
+      # The cache-redirect patch must live ONLY in the sidecar. If it leaks into
+      # the live DLL, ACTIONS_RESULTS_URL is unset whenever cache.enabled is false
+      # and actions/upload-artifact fails with "Unable to get the
+      # ACTIONS_RESULTS_URL env variable".
+      # The cache-redirect patch must live ONLY in the sidecar. If it leaks into
+      # the live DLL, ACTIONS_RESULTS_URL is unset whenever cache.enabled is false
+      # and actions/upload-artifact fails with "Unable to get the
+      # ACTIONS_RESULTS_URL env variable".
+      #
+      # Scan bytes, not decoded text: the UTF-16LE literal sits at an odd file
+      # offset, so reading the DLL as UTF-16 from byte 0 never finds it.
+      - name: Verify cache patch is sidecar-only
+        shell: pwsh
+        run: |
+          $script = @'
+          function Test-Lit([string]$Path, [string]$S) {
+              $b = [IO.File]::ReadAllBytes($Path)
+              $q = [Text.Encoding]::Unicode.GetBytes($S)
+              for ($i = 0; $i -le $b.Length - $q.Length; $i++) {
+                  $m = $true
+                  for ($j = 0; $j -lt $q.Length; $j++) { if ($b[$i+$j] -ne $q[$j]) { $m = $false; break } }
+                  if ($m) { return $true }
+              }
+              return $false
+          }
+          $dll = 'C:\actions-runner\bin\Runner.Worker.dll'
+          if (-not (Test-Lit $dll 'ACTIONS_RESULTS_URL')) { throw 'stock DLL was patched' }
+          if (Test-Lit $dll 'ACTIONS_RESULTS_URX') { throw 'stock DLL was patched' }
+          if (-not (Test-Lit ($dll + '.mrpatched') 'ACTIONS_RESULTS_URX')) { throw 'sidecar not patched' }
+          'sidecar-only OK'
+          '@
+          docker run --rm --entrypoint pwsh mr-check-windows:minimal -NoProfile -Command $script
 
       - name: Smoke-test VS Build Tools
         shell: bash

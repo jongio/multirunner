@@ -285,7 +285,10 @@ multirunner runs an embedded Go server implementing the v2 twirp `CacheService`
 plus the Azure block-upload data plane, stores blobs locally, and injects
 `ACTIONS_RESULTS_URL` / `ACTIONS_CACHE_URL` / `ACTIONS_CACHE_SERVICE_V2=true` into
 every runner. The runner image includes a small patch so the redirect reaches
-`uses:` actions (not just `run:` steps). Stale entries are garbage-collected
+`uses:` actions (not just `run:` steps). The patch ships as a sidecar copy and is
+swapped in at container start only when a redirect is actually injected, so with
+the cache off the stock runner keeps its own `ACTIONS_RESULTS_URL` and
+`actions/upload-artifact` still works. Stale entries are garbage-collected
 automatically.
 
 The embedded cache adds a private `/_mr/<token>` path segment to the URL it
