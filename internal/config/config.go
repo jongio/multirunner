@@ -176,6 +176,8 @@ var publishedFlavors = map[string]map[string]bool{
 		"go":           true,
 	},
 	"windows": {
+		"node":       true,
+		"dotnet":     true,
 		"buildtools": true,
 	},
 }

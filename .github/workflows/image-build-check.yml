@@ -38,18 +38,43 @@ jobs:
           docker run --rm --entrypoint bash $B:rust          -lc 'rustc --version && cargo --version'
           docker run --rm --entrypoint bash $B:go            -lc 'go version'
 
+
   windows:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build minimal + buildtools (no push)
+      - name: Build minimal + flavors (no push)
         shell: bash
         run: |
           set -euo pipefail
           B=mr-check-windows
           docker build -f images/windows/Dockerfile -t $B:minimal .
+          docker build -f images/windows/flavors/node.Dockerfile       --build-arg "PARENT=$B:minimal" -t $B:node .
+          docker build -f images/windows/flavors/dotnet.Dockerfile     --build-arg "PARENT=$B:node"    -t $B:dotnet .
           docker build -f images/windows/flavors/buildtools.Dockerfile --build-arg "PARENT=$B:minimal" -t $B:buildtools .
+
+      - name: Smoke-test node + dotnet toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          B=mr-check-windows
+          # `where` also proves the machine PATH edits survived into a fresh
+          # container, which is what jobs calling node/dotnet directly rely on.
+          docker run --rm --entrypoint cmd $B:node   /c "where node && where npm && node --version"
+          docker run --rm --entrypoint cmd $B:dotnet /c "where dotnet && dotnet --list-sdks && node --version"
+
+      - name: Verify tool-cache and DOTNET_ROOT paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          B=mr-check-windows
+          # Docker's default escape character is `\`, so an unescaped
+          # `ENV X=C:\foo` silently becomes `C:foo`. Assert the real values.
+          docker run --rm --entrypoint cmd $B:dotnet /c \
+            "if not \"%RUNNER_TOOL_CACHE%\"==\"C:\\hostedtoolcache\\windows\" exit 1"
+          docker run --rm --entrypoint cmd $B:dotnet /c \
+            "if not \"%DOTNET_ROOT%\"==\"C:\\dotnet\" exit 1"
 
       - name: Smoke-test VS Build Tools
         shell: bash

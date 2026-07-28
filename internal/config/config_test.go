@@ -127,9 +127,12 @@ func TestImageRef(t *testing.T) {
 		{"linux", "native-build", "", "gerardsmit/multirunner-runner-linux:native-build"},
 		{"linux", "rust", "", "gerardsmit/multirunner-runner-linux:rust"},
 		{"linux", "go", "", "gerardsmit/multirunner-runner-linux:go"},
+		{"windows", "node", "", "gerardsmit/multirunner-runner-windows:node"},
+		{"windows", "dotnet", "", "gerardsmit/multirunner-runner-windows:dotnet"},
 		{"windows", "buildtools", "", "gerardsmit/multirunner-runner-windows:buildtools"},
 		{"linux", "custom", "", "multirunner/runner-linux-custom:dev"},
 		{"windows", "minimal", "", "gerardsmit/multirunner-runner-windows:latest"},
+		{"windows", "rust", "", "multirunner/runner-windows-rust:dev"},
 		{"linux", "minimal", "ghcr.io/me/x:1", "ghcr.io/me/x:1"},
 	}
 	for _, c := range cases {
