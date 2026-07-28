@@ -6,6 +6,7 @@ package autoscale
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/GerardSmit/multirunner/internal/config"
@@ -131,11 +132,16 @@ func (s *Scaler) reconcile() {
 
 // labelsMatch reports whether a pool with poolLabels can serve a job requesting
 // jobLabels (the pool must carry every requested label).
+//
+// Matching is case-insensitive because GitHub treats runner labels that way: a
+// job requesting the standard `[self-hosted, Windows, X64]` is served by a runner
+// registered as `windows`/`x64`. Comparing case-sensitively here made autoscale
+// silently match nothing for any workflow using GitHub's default label casing.
 func labelsMatch(poolLabels, jobLabels []string) bool {
 	for _, jl := range jobLabels {
 		found := false
 		for _, pl := range poolLabels {
-			if pl == jl {
+			if strings.EqualFold(pl, jl) {
 				found = true
 				break
 			}
