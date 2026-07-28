@@ -217,7 +217,11 @@ pools:
 ```
 
 `multirunner doctor` reports daemon reachability and catches mismatches (e.g. a
-Linux daemon assigned to a Windows pool).
+Linux daemon assigned to a Windows pool). With `scope: repos` it also checks the
+input side, flagging two config shapes that otherwise look exactly like an idle
+day: repos with GitHub Actions switched off, and repos where no workflow targets
+a self-hosted runner. Either way the pools sit empty and nothing reports an
+error, so doctor calls them out by name.
 
 ### Windows runners on a Linux host (QEMU VM)
 

@@ -36,6 +36,11 @@ func main() {
 
 const version = "0.1.0-dev"
 
+// remoteCheckTimeout bounds doctor's GitHub API phase. Sized for the workflow
+// scan, which is the only check that scales with repo count times workflow count
+// rather than repo count alone.
+const remoteCheckTimeout = 90 * time.Second
+
 func rootCmd() *cobra.Command {
 	var cfgPath string
 	var installDeps bool
@@ -687,9 +692,16 @@ func doctor(configPath string) error {
 		fmt.Printf("[%s] os=%s host=%s image=%s -> %s\n", pc.Name, pc.OS, pc.Docker.Host, pc.ImageRef(), status)
 	}
 	warnStarvedRepos(cfg)
-	if err := checkActionsEnabled(ctx, cfg); err != nil {
+	// The remote checks get a budget of their own. They share nothing with the
+	// pool pings above, and a single hung daemon eating the 20s would otherwise
+	// starve them into reporting "could not check" for every repo, which reads
+	// as a GitHub problem when it is a local one.
+	apiCtx, apiCancel := context.WithTimeout(context.WithoutCancel(ctx), remoteCheckTimeout)
+	defer apiCancel()
+	if err := checkActionsEnabled(apiCtx, cfg); err != nil {
 		allOK = false
 	}
+	warnNoSelfHostedWorkflows(apiCtx, cfg)
 	if !allOK {
 		return fmt.Errorf("preflight found problems")
 	}
@@ -741,6 +753,79 @@ func checkActionsEnabled(ctx context.Context, cfg *config.Config) error {
 		"        fix: enable Actions under Settings > Actions > General, or drop them from github.repos.\n",
 		len(disabled), len(cfg.GitHub.ResolvedRepos()), strings.Join(disabled, ", "))
 	return fmt.Errorf("actions disabled on %d repo(s)", len(disabled))
+}
+
+// warnNoSelfHostedWorkflows flags configured repos where no workflow targets a
+// self-hosted runner. Listing a repo here tells multirunner to poll it every
+// interval forever, but a repo whose workflows all run on GitHub-hosted runners
+// can never hand it a job. The pools just look idle, which is indistinguishable
+// from a quiet day.
+//
+// Detection is a literal search for "self-hosted" under .github/workflows.
+// runs-on can legally name custom labels only (runs-on: [Windows, X64]) and
+// matrix or expression forms cannot be resolved without evaluating the workflow,
+// so a miss here is possible. That is why this only ever advises and never fails
+// doctor: a false alarm on a working repo would be worse than staying quiet.
+func warnNoSelfHostedWorkflows(ctx context.Context, cfg *config.Config) {
+	if cfg.GitHub.Scope != config.ScopeRepos {
+		return
+	}
+	var unused []string
+	for _, ref := range cfg.GitHub.ResolvedRepos() {
+		repoGH := cfg.GitHub
+		repoGH.Scope = config.ScopeRepo
+		repoGH.Owner = ref.Owner
+		repoGH.Repo = ref.Repo
+		name := ref.Owner + "/" + ref.Repo
+
+		c, err := github.New(ctx, repoGH, cfg.Auth)
+		if err != nil {
+			fmt.Printf("\n[%s] could not scan workflows: %v\n", name, err)
+			continue
+		}
+		found, err := repoTargetsSelfHosted(ctx, c)
+		if err != nil {
+			fmt.Printf("\n[%s] could not scan workflows: %v\n", name, err)
+			continue
+		}
+		if !found {
+			unused = append(unused, name)
+		}
+	}
+	if len(unused) == 0 {
+		return
+	}
+	fmt.Printf("\nNOTE: no workflow targets a self-hosted runner in %d of %d configured repo(s): %s\n"+
+		"        multirunner polls these every interval but they can never send it a job.\n"+
+		"        fix: point a workflow at `runs-on: [self-hosted, ...]`, or drop them from github.repos.\n"+
+		"        (custom-label and matrix runs-on forms are not detected, so verify before removing)\n",
+		len(unused), len(cfg.GitHub.ResolvedRepos()), strings.Join(unused, ", "))
+}
+
+// repoTargetsSelfHosted reports whether any workflow file mentions the
+// self-hosted label. Stops at the first hit so a repo that uses multirunner
+// costs one extra call rather than one per workflow.
+func repoTargetsSelfHosted(ctx context.Context, c *github.Client) (bool, error) {
+	paths, err := c.RepoFilePaths(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, p := range paths {
+		if !strings.HasPrefix(p, ".github/workflows/") {
+			continue
+		}
+		if ext := strings.ToLower(filepath.Ext(p)); ext != ".yml" && ext != ".yaml" {
+			continue
+		}
+		body, err := c.RepoFile(ctx, p)
+		if err != nil {
+			return false, err
+		}
+		if strings.Contains(string(body), "self-hosted") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // warnStarvedRepos flags the one config shape that silently strands work: pool
