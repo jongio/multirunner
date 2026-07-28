@@ -74,9 +74,16 @@ func scriptParams(t *testing.T) map[string]string {
 	}
 	block := script[start : start+end]
 	out := map[string]string{}
-	re := regexp.MustCompile(`\$(\w+)\s*=\s*'([^']*)'`)
+	// Defaults may be single- or double-quoted; double quotes are needed when
+	// the value interpolates, as InstallDir does with $env:ProgramFiles.
+	re := regexp.MustCompile(`\$(\w+)\s*=\s*(?:'([^']*)'|"([^"]*)")`)
 	for _, m := range re.FindAllStringSubmatch(block, -1) {
-		out[m[1]] = m[2]
+		out[m[1]] = m[2] + m[3] // exactly one alternative matches
+	}
+	// Fail closed. A default this regex cannot read would silently vanish from
+	// the map and quietly weaken every guard built on scriptParams.
+	if n := len(regexp.MustCompile(`\$\w+\s*=`).FindAllString(block, -1)); n != len(out) {
+		t.Fatalf("param() has %d defaults but only %d parsed; teach scriptParams the new syntax", n, len(out))
 	}
 	return out
 }
@@ -96,14 +103,41 @@ func TestScriptDeclaresEveryParamInstallArgsPasses(t *testing.T) {
 }
 
 func TestScriptDataRootDefaultsToScriptChoice(t *testing.T) {
-	// Empty default keeps back-compat: the script resolves it to
-	// <InstallDir>\data, so callers that do not care get the old layout.
+	// Empty default lets the script pick, so callers that do not care get a
+	// store under %ProgramData% rather than inside Program Files.
 	params := scriptParams(t)
 	if got, ok := params["DataRoot"]; !ok || got != "" {
 		t.Errorf("DataRoot default = %q (present=%v), want empty", got, ok)
 	}
-	if !strings.Contains(script, `$DataRoot = Join-Path $InstallDir 'data'`) {
-		t.Error("script does not fall back to <InstallDir>\\data when DataRoot is empty")
+	if !strings.Contains(script, `$DataRoot = Join-Path $cfgDir 'data'`) {
+		t.Error("script does not fall back to a %ProgramData% store when DataRoot is empty")
+	}
+}
+
+// Defender's Controlled Folder Access allowlist names
+// %ProgramFiles%\DockerStandalone\dockerd.exe exactly. Installing anywhere
+// else, or nesting the binaries in a bin\ subfolder, makes CFA block the
+// scratch-VHD expansion and every container create fails with
+// "hcsshim::ExpandScratchSize failed in Win32: Access is denied. (0x5)".
+func TestScriptInstallsDockerdOnTheAllowlistedPath(t *testing.T) {
+	if got := scriptParams(t)["InstallDir"]; got != `$env:ProgramFiles\DockerStandalone` {
+		t.Errorf("InstallDir default = %q, want the CFA-allowlisted DockerStandalone path", got)
+	}
+	if !strings.Contains(script, `$dockerd = Join-Path $InstallDir 'dockerd.exe'`) {
+		t.Error("dockerd.exe must sit directly in InstallDir; a bin\\ subfolder breaks the CFA allowlist match")
+	}
+}
+
+// Program Files is for read-only program files. The image store runs to many
+// GB, so it must never default to a subfolder of InstallDir.
+func TestScriptKeepsMutableStateOutOfInstallDir(t *testing.T) {
+	for _, bad := range []string{
+		`Join-Path $InstallDir 'data'`,
+		`Join-Path $InstallDir 'config'`,
+	} {
+		if strings.Contains(script, bad) {
+			t.Errorf("script puts mutable state under Program Files via %s", bad)
+		}
 	}
 }
 

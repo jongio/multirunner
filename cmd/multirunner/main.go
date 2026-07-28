@@ -143,7 +143,8 @@ so it coexists with Podman/Docker Desktop and the WSL Linux daemon. Windows only
 		},
 	}
 	winDaemon.Flags().StringVar(&winDataRoot, "data-root", "",
-		"where the daemon stores images and containers (default <install-dir>\\data); "+
+		"where the daemon stores images and containers "+
+			"(default %ProgramData%\\multirunner\\docker\\data); "+
 			"point at an existing store to keep its images")
 
 	installContainerd := &cobra.Command{

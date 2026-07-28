@@ -154,9 +154,9 @@ func InstallContainerd() error {
 // InstallOptions configures the Windows daemon install.
 type InstallOptions struct {
 	// DataRoot overrides where the daemon stores images and containers. Empty
-	// uses the script default (<InstallDir>\data). Set this to keep the image
-	// store off the system volume, or to adopt an existing store so images
-	// survive replacing a previous daemon.
+	// uses the script default (%ProgramData%\multirunner\docker\data). Set this
+	// to keep the image store off the system volume, or to adopt an existing
+	// store so images survive replacing a previous daemon.
 	DataRoot string
 }
 

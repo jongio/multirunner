@@ -17,10 +17,11 @@
   The daemon pipe is ACL'd to $Group so non-elevated docker clients can reach it.
 
   DataRoot is where the daemon stores images and containers. It defaults to
-  <InstallDir>\data but is separate from InstallDir on purpose: Windows base
-  images run to several GB each, so the image store often belongs on a
-  different volume than the daemon binaries. Pointing DataRoot at an existing
-  store also lets this service adopt images from a daemon it replaces.
+  %ProgramData%\multirunner\docker\data, deliberately outside InstallDir:
+  Windows base images run to several GB each, so the store belongs with the
+  other mutable state (and often on another volume), not under Program Files.
+  Pointing DataRoot at an existing store also lets this service adopt images
+  from a daemon it replaces.
 #>
 [CmdletBinding()]
 param(
@@ -29,7 +30,15 @@ param(
     # a data-root written by a newer daemon cannot be served by an older one.
     # Track the current stable release rather than the SDK version.
     [string]$DockerVersion = '29.6.2',
-    [string]$InstallDir    = 'C:\multirunner-docker',
+    # Windows Defender's Controlled Folder Access ships an allowlist that names
+    # %ProgramFiles%\DockerStandalone\dockerd.exe. Expanding a container's
+    # scratch VHD is a raw disk write, which CFA blocks for any process not on
+    # that list, surfacing as "hcsshim::ExpandScratchSize failed in Win32:
+    # Access is denied. (0x5)" on every container create. Installing to the
+    # allowlisted path keeps Windows containers working without asking anyone
+    # to weaken Defender. The binaries therefore sit directly in InstallDir,
+    # since the allowlist entry matches that exact path.
+    [string]$InstallDir    = "$env:ProgramFiles\DockerStandalone",
     [string]$DataRoot      = '',
     [string]$Pipe          = 'npipe:////./pipe/docker_engine_windows',
     [string]$ServiceName   = 'multirunner-dockerd',
@@ -66,18 +75,23 @@ try {
         }
     }
 
-    # 2. Download Moby static binaries
-    $binDir = Join-Path $InstallDir 'bin'
-    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-    $dockerd = Join-Path $binDir 'dockerd.exe'
+    # 2. Download Moby static binaries. They land directly in $InstallDir with
+    # no bin\ subfolder so dockerd.exe matches the Controlled Folder Access
+    # allowlist entry exactly; see the note on $InstallDir above. Extraction
+    # goes through a temp staging dir so the zip's own docker\ folder is not
+    # left behind inside the install directory.
+    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+    $dockerd = Join-Path $InstallDir 'dockerd.exe'
     if (-not (Test-Path $dockerd)) {
         $url = "https://download.docker.com/win/static/stable/x86_64/docker-$DockerVersion.zip"
         $zip = Join-Path $env:TEMP "docker-$DockerVersion.zip"
+        $staging = Join-Path $env:TEMP "docker-$DockerVersion-extract"
         Write-Host "Downloading $url ..."
         Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
-        Expand-Archive -Path $zip -DestinationPath $InstallDir -Force   # extracts <InstallDir>\docker\*.exe
-        Copy-Item (Join-Path $InstallDir 'docker\*.exe') $binDir -Force
-        Remove-Item $zip -Force
+        Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+        Expand-Archive -Path $zip -DestinationPath $staging -Force   # extracts <staging>\docker\*.exe
+        Copy-Item (Join-Path $staging 'docker\*.exe') $InstallDir -Force
+        Remove-Item $zip, $staging -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     # 3. Resolve isolation. Process isolation requires an exact host/container
@@ -116,9 +130,11 @@ try {
         catch { Write-Warning "Could not add $me to ${Group}: $($_.Exception.Message)" }
     }
 
-    # 5. daemon.json
-    $cfgDir = Join-Path $InstallDir 'config'
-    if ([string]::IsNullOrWhiteSpace($DataRoot)) { $DataRoot = Join-Path $InstallDir 'data' }
+    # 5. daemon.json. Config and the image store live under %ProgramData%, not
+    # InstallDir: Program Files is for read-only program files, while the image
+    # store grows to many GB and the daemon rewrites config on every install.
+    $cfgDir = Join-Path $StatusDir 'docker'
+    if ([string]::IsNullOrWhiteSpace($DataRoot)) { $DataRoot = Join-Path $cfgDir 'data' }
     New-Item -ItemType Directory -Force -Path $cfgDir, $DataRoot | Out-Null
     $cfgPath = Join-Path $cfgDir 'daemon.json'
     $daemon = [ordered]@{
