@@ -64,12 +64,31 @@ func (l *Launcher) EnsureImage(ctx context.Context) error {
 	return nil
 }
 
-// RunOne provisions a fresh JIT runner and blocks until it finishes its one job.
+// RunOne provisions a fresh JIT runner for the next repo in rotation and blocks
+// until it finishes its one job. This is the warm-capacity path: there is no
+// queued job to place against, so rotation is the best available choice. When a
+// specific repo has queued work, call RunOneOn instead.
 func (l *Launcher) RunOne(ctx context.Context) (int, error) {
+	return l.RunOneOn(ctx, l.gh.NextClient())
+}
+
+// RunOneOn provisions a fresh JIT runner registered to client's repo and blocks
+// until it finishes its one job. A repo-scoped runner binds to exactly one repo,
+// so demand-driven launches must pass the client for the repo that queued the
+// job; otherwise the runner idles on a repo that has no work while the job that
+// triggered the launch stays queued. A nil client falls back to rotation.
+func (l *Launcher) RunOneOn(ctx context.Context, client *github.Client) (int, error) {
+	// Resolve before the OnStart hook so an unusable pool cannot leak an
+	// unmatched start into the metrics.
+	if client == nil {
+		client = l.gh.NextClient()
+	}
+	if client == nil {
+		return 0, fmt.Errorf("pool %s: no github client available to register a runner", l.cfg.Name)
+	}
 	if l.hooks.OnStart != nil {
 		l.hooks.OnStart(l.cfg.Name)
 	}
-	client := l.gh.NextClient()
 	spec := runner.Spec{
 		Name:          l.runnerName(),
 		Image:         l.image,
@@ -79,7 +98,7 @@ func (l *Launcher) RunOne(ctx context.Context) (int, error) {
 		Env:           l.env,
 		Mounts:        l.mounts,
 	}
-	code, err := runner.RunOnce(ctx, client, l.be, spec, l.logger)
+	code, err := runner.RunOnce(ctx, client, l.be, spec, l.logger.With("target", client.Target()))
 	if l.hooks.OnStop != nil {
 		l.hooks.OnStop(l.cfg.Name, code, err)
 	}

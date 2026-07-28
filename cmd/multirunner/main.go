@@ -686,11 +686,33 @@ func doctor(configPath string) error {
 		be.Close()
 		fmt.Printf("[%s] os=%s host=%s image=%s -> %s\n", pc.Name, pc.OS, pc.Docker.Host, pc.ImageRef(), status)
 	}
+	warnStarvedRepos(cfg)
 	if !allOK {
 		return fmt.Errorf("preflight found problems")
 	}
 	fmt.Println("\nall pools ready")
 	return nil
+}
+
+// warnStarvedRepos flags the one config shape that silently strands work: pool
+// provisioning across more repos than a pool has slots. A repo-scoped runner
+// binds to exactly one repo, and a pool slot only re-registers after its runner
+// finishes a job, so idle slots never rotate. Repos that never win a slot get no
+// runner at all and their jobs queue forever. Autoscale does not have this
+// problem because it places runners on the repo that queued the work.
+func warnStarvedRepos(cfg *config.Config) {
+	if cfg.GitHub.Scope != config.ScopeRepos || cfg.Provisioning.IsAutoscale() {
+		return
+	}
+	repos := len(cfg.GitHub.Repos)
+	for _, pc := range cfg.Pools {
+		if pc.Size >= repos {
+			continue
+		}
+		fmt.Printf("\n[%s] WARNING: size=%d but repos=%d. At least %d repo(s) will have no %s runner and their jobs will stay queued.\n"+
+			"        fix: raise size to %d, or set provisioning: autoscale so runners are placed on the repo that queued the job.\n",
+			pc.Name, pc.Size, repos, repos-pc.Size, pc.OS, repos)
+	}
 }
 
 func newLogger(l config.Log) *slog.Logger {

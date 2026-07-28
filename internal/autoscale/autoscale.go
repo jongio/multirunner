@@ -57,13 +57,21 @@ func (s *Scaler) Run(ctx context.Context) error {
 	return nil
 }
 
-// OnQueued launches one runner for the first matching pool with spare capacity.
+// OnQueued launches one runner for the first matching pool with spare capacity,
+// registered to repo ("owner/repo") so the runner can actually serve the job
+// that triggered it. An empty or unmanaged repo falls back to rotation.
 // Launches use the scaler's long-lived context (NOT the caller's), so a webhook
 // handler returning does not cancel the runner.
-func (s *Scaler) OnQueued(labels []string) {
+func (s *Scaler) OnQueued(repo string, labels []string) {
+	s.launchFor(s.gh.ClientFor(repo), labels)
+}
+
+// launchFor launches one runner on client for the first matching pool with spare
+// capacity.
+func (s *Scaler) launchFor(client *github.Client, labels []string) {
 	for _, st := range s.states {
 		if labelsMatch(st.l.Labels(), labels) {
-			if s.tryLaunch(st) {
+			if s.tryLaunch(st, client) {
 				return
 			}
 		}
@@ -71,13 +79,17 @@ func (s *Scaler) OnQueued(labels []string) {
 	s.logger.Debug("queued job: no matching pool with spare capacity", "labels", labels)
 }
 
-func (s *Scaler) tryLaunch(st *state) bool {
+func (s *Scaler) tryLaunch(st *state, client *github.Client) bool {
 	select {
 	case st.sem <- struct{}{}:
-		s.logger.Info("scaling up", "pool", st.l.Name())
+		target := "rotation"
+		if client != nil {
+			target = client.Target()
+		}
+		s.logger.Info("scaling up", "pool", st.l.Name(), "target", target)
 		go func() {
 			defer func() { <-st.sem }()
-			if _, err := st.l.RunOne(s.baseCtx); err != nil && s.baseCtx.Err() == nil {
+			if _, err := st.l.RunOneOn(s.baseCtx, client); err != nil && s.baseCtx.Err() == nil {
 				s.logger.Error("runner failed", "pool", st.l.Name(), "err", err)
 			}
 		}()
@@ -101,17 +113,19 @@ func (s *Scaler) pollLoop(ctx context.Context) {
 }
 
 // reconcile queries queued work (repo/repos scope) and tops up runners to capacity.
+// Each job carries the client for the repo that queued it, so the runner is
+// registered there rather than wherever rotation happens to point.
 func (s *Scaler) reconcile() {
 	if s.scope != config.ScopeRepo && s.scope != config.ScopeRepos {
 		return // org/enterprise: rely on webhook (no cheap queued-jobs endpoint)
 	}
-	jobs, err := s.gh.QueuedJobLabels(s.baseCtx)
+	jobs, err := s.gh.QueuedJobs(s.baseCtx)
 	if err != nil {
 		s.logger.Warn("poll queued jobs failed", "err", err)
 		return
 	}
-	for _, labels := range jobs {
-		s.OnQueued(labels)
+	for _, job := range jobs {
+		s.launchFor(job.Client, job.Labels)
 	}
 }
 
