@@ -14,6 +14,8 @@ param(
 
     [string]$DataVolume = 'multirunner-container-build-data',
 
+    [string]$WorkspaceDirectory = 'C:\multirunner\container-build\workspaces',
+
     [string]$ServiceName = 'multirunner',
 
     [string]$SourceDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
@@ -264,6 +266,7 @@ if ($RotateCertificates -and (Test-DockerResource -Type volume -Name $Certificat
 
 Initialize-Volume -Name $CertificateVolume
 Initialize-Volume -Name $DataVolume
+New-Item -ItemType Directory -Path $WorkspaceDirectory -Force | Out-Null
 
 if (-not $containerExists) {
     Invoke-Docker -Arguments @(
@@ -276,11 +279,22 @@ if (-not $containerExists) {
         '--publish', "127.0.0.1:${Port}:2376",
         '--volume', "${CertificateVolume}:/certs",
         '--volume', "${DataVolume}:/var/lib/docker",
+        '--volume', "${WorkspaceDirectory}:/home/runner",
         $Image
     ) | Out-Null
 }
 
 Wait-ForDaemon -Name $ContainerName -TimeoutSeconds 90
+$workspaceMount = @(
+    Invoke-Docker -Arguments @(
+        'container', 'inspect',
+        '--format', '{{range .Mounts}}{{if eq .Destination "/home/runner"}}{{.Source}}{{end}}{{end}}',
+        $ContainerName
+    )
+)
+if ($workspaceMount.Count -ne 1 -or [string]::IsNullOrWhiteSpace($workspaceMount[0])) {
+    throw "Container $ContainerName has no /home/runner workspace mount. Re-run with -Replace."
+}
 Export-ClientCertificateSet -Name $ContainerName -Destination $CertificateDirectory
 
 $version = @(Invoke-Docker -Arguments @(
@@ -314,6 +328,7 @@ Write-Output "container=$ContainerName"
 Write-Output "image=$Image"
 Write-Output "docker_host=$DockerHost"
 Write-Output "certificates=$CertificateDirectory"
+Write-Output "workspaces=$WorkspaceDirectory"
 Write-Output "runner_image=$RunnerImage"
 Write-Output "runner_image_id=$runnerImageID"
 Write-Output 'status=ready'
