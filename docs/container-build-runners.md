@@ -33,7 +33,7 @@ Docker API access to the daemon that runs general multirunner workloads.
 Run the installer from an elevated PowerShell 7 session:
 
 ```powershell
-.\scripts\install-container-build-daemon.ps1
+.\scripts\install-container-build-daemon.ps1 -WorkFolders _work
 ```
 
 The script creates these durable resources:
@@ -113,8 +113,10 @@ pools:
 `share_workspace` bind-mounts `/home/runner/<work_folder>` into the runner at
 the same path. The installer mounts its workspace directory at `/home/runner`
 inside the dedicated daemon, which lets Docker actions resolve the bind paths
-that the Actions runner passes to the daemon. Use a distinct `work_folder` for
-each pool sharing one daemon so concurrent jobs cannot write to the same path.
+that the Actions runner passes to the daemon. Pass every configured work folder
+to `-WorkFolders`; the installer creates them with access for Docker Desktop.
+Use a distinct `work_folder` for each pool sharing one daemon so concurrent jobs
+cannot write to the same path.
 
 Use `runs-on: [container-build]` only in trusted workflows. Labels select
 runners but are not an authorization system. The `repository` binding is a

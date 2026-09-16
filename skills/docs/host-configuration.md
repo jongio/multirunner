@@ -313,7 +313,8 @@ primarily a Linux socket setting and does not make Windows DinD work.
 `docker.share_workspace: true` additionally bind-mounts
 `/home/runner/<work_folder>` into a Linux Docker runner. Use it only with a
 dedicated daemon whose `/home/runner` path is backed by the workspace directory
-created by `scripts/install-container-build-daemon.ps1`. Docker actions need
+created by `scripts/install-container-build-daemon.ps1`. Pass every pool's
+`work_folder` to the installer's `-WorkFolders` parameter. Docker actions need
 this shared path because their child containers bind the parent workspace.
 
 ## Cache
