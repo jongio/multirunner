@@ -181,16 +181,16 @@ func TestSanitizedLogTailRetainsCrashSummaryWithLatestDiagnostics(t *testing.T) 
 	}
 }
 
-type failingReader struct{}
+type serviceErrorReader struct{}
 
-func (failingReader) Read([]byte) (int, error) {
+func (serviceErrorReader) Read([]byte) (int, error) {
 	return 0, io.ErrUnexpectedEOF
 }
 
 func TestCopyServiceOutputSanitizesReadErrors(t *testing.T) {
 	logger := &recordingServiceLogger{}
 	tail := &sanitizedLogTail{}
-	copyServiceOutputWithSecrets(failingReader{}, logger, tail, "configured-secret")
+	copyServiceOutputWithSecrets(serviceErrorReader{}, logger, tail, "configured-secret")
 	if len(logger.errors) != 1 || !strings.Contains(tail.String(), "capture failed") {
 		t.Fatalf("capture error logger=%v tail=%q", logger.errors, tail.String())
 	}
