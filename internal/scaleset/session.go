@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/actions/scaleset"
@@ -172,6 +173,14 @@ func classifySessionError(err error) error {
 		return permanentSessionError{err}
 	}
 	return err
+}
+
+// isSessionConflict reports whether err is the one-active-session 409. The
+// library surfaces it as text rather than a typed error.
+func isSessionConflict(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "409 Conflict") &&
+		strings.Contains(msg, "RunnerScaleSetSessionConflictException")
 }
 
 type permanentSessionError struct {

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -131,41 +132,90 @@ Exits non-zero if any required check is incomplete or misconfigured.`,
 		},
 	}
 
-	var connOrg, connRepo, connName, connKeyOut string
+	var connOrg, connRepo, connName, connKeyOut, connWebhookURL string
 	var connPort int
-	var connDryRun bool
+	var connDryRun, connDetect, connNonInteractive, connOwnApp, connDevice bool
 	connectC := &cobra.Command{
 		Use:   "connect",
-		Short: "Create + install a GitHub App and write its credentials to the config",
-		Long: `Connect multirunner to GitHub using a GitHub App, without registering anything
-in advance. A browser flow opens GitHub's "create App" page pre-filled with the
-right permissions (self-hosted runner admin); after you create and install the
-App, multirunner captures the App id, private key, installation id, and webhook
-secret, writes the private key next to your config, and updates the config's
-auth section to use the App (any existing pat is removed).
+		Short: "Authorize multirunner against GitHub and write auth to the config",
+		Long: `Connect multirunner to GitHub. By default this uses the shared "Multirunner
+Connect" GitHub App via the device flow: connect prints a code, you enter it at
+https://github.com/login/device and authorize the App, and multirunner saves the
+resulting user access token (which rotates on refresh) in a sidecar next to the
+config and writes auth.client_id + auth.token_path (any existing pat and
+installation-App keys are removed). No App is created, no browser redirect, and
+no local port is opened. The token is tied to the authorizing user and stops
+working when their access to the org does.
 
-Specify exactly one target: --org for an org-scoped App, or --repo owner/name
-for a repo-scoped App.`,
+Pass --own-app to instead create a dedicated GitHub App in your org/account via
+the manifest flow: a browser opens GitHub's "create App" page pre-filled with a
+manifest derived from what the host will do (self-hosted runner admin, plus
+actions:read and contents:read as needed); after you create and install the App,
+multirunner captures the App id, private key, installation id, and webhook
+secret, writes the private key next to your config, and updates the config to use
+the App. This yields an org-owned installation credential that survives an
+individual leaving the org. When GitHub returns a webhook secret it is written
+next to the private key as multirunner-app.webhook-secret (mode 0600); wire
+webhook.secret to an env var holding that file's contents rather than inlining it.
+
+Specify exactly one target: --org for an org-scoped connection, or --repo
+owner/name for a repo-scoped one. On a terminal, connect prompts for a missing
+target. --webhook-url, --detect, --name, --key-out and --port apply only to
+--own-app; --non-interactive skips every prompt.`,
 		Example: `  multirunner connect --org my-org
-  multirunner connect --repo my-org/my-repo --config config.yaml`,
+  multirunner connect --repo my-org/my-repo --config config.yaml
+  multirunner connect --org my-org --own-app`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			abs, err := filepath.Abs(cfgPath)
 			if err != nil {
 				return err
 			}
-			if connDryRun {
-				return connectPlan(cmd.OutOrStdout(), abs, connOrg, connRepo, connName, connPort, connKeyOut)
+			f := connectFlags{
+				org: connOrg, repo: connRepo, name: connName, keyOut: connKeyOut,
+				port: connPort, webhookURL: connWebhookURL,
+				detect: connDetect,
 			}
-			return connectCmd(abs, connOrg, connRepo, connName, connPort, connKeyOut)
+			out := cmd.OutOrStdout()
+			interactive := isTerminal(os.Stdin) && !connNonInteractive
+
+			if connDryRun {
+				if connOwnApp {
+					return connectPlan(out, abs, f)
+				}
+				return connectDevicePlan(out, abs, f, changedManifestFlags(cmd))
+			}
+
+			if !interactive && !connOwnApp && !connDevice {
+				return fmt.Errorf("connect needs a terminal to choose an authentication model.\n" +
+					"Pass --own-app to create a dedicated GitHub App, or --device to print a device code\n" +
+					"(only safe where the output is not logged: anyone who reads the code can authorize instead of you)")
+			}
+
+			stdin := bufio.NewReader(os.Stdin)
+			ownApp := connOwnApp
+			var st *steps
+			if !connOwnApp && interactive {
+				st = newSteps(out, 3)
+				ownApp = wantOwnApp(stdin, st, interactive)
+			}
+			if ownApp {
+				return connectCmd(abs, f, stdin, out, interactive, st)
+			}
+			return connectDeviceCmd(abs, f, changedManifestFlags(cmd), stdin, out, interactive, st)
 		},
 	}
-	connectC.Flags().BoolVar(&connDryRun, "dry-run", false, "print the GitHub and local changes without opening a browser or writing files")
-	connectC.Flags().StringVar(&connOrg, "org", "", "GitHub org login (org-scoped App)")
-	connectC.Flags().StringVar(&connRepo, "repo", "", "owner/repo (repo-scoped App)")
-	connectC.Flags().StringVar(&connName, "name", "multirunner", "GitHub App name")
-	connectC.Flags().IntVar(&connPort, "port", 0, "local callback port (0 = auto)")
-	connectC.Flags().StringVar(&connKeyOut, "key-out", "", "path to write the App private key")
+	connectC.Flags().BoolVar(&connDryRun, "dry-run", false, "print the GitHub and local changes without contacting GitHub or writing files")
+	connectC.Flags().BoolVar(&connOwnApp, "own-app", false, "create a dedicated GitHub App via the manifest flow instead of the shared-App device flow")
+	connectC.Flags().StringVar(&connOrg, "org", "", "GitHub org login (org-scoped connection)")
+	connectC.Flags().StringVar(&connRepo, "repo", "", "owner/repo (repo-scoped connection)")
+	connectC.Flags().StringVar(&connName, "name", "multirunner", "GitHub App name (--own-app only)")
+	connectC.Flags().IntVar(&connPort, "port", 0, "local callback port, 0 = auto (--own-app only)")
+	connectC.Flags().StringVar(&connKeyOut, "key-out", "", "path to write the App private key (--own-app only)")
+	connectC.Flags().StringVar(&connWebhookURL, "webhook-url", "", "public https URL for workflow_job delivery, enables an active webhook (--own-app only)")
+	connectC.Flags().BoolVar(&connDetect, "detect", false, "also request contents:read so `multirunner detect --repo` works (--own-app only)")
+	connectC.Flags().BoolVar(&connDevice, "device", false, "off a terminal, authorize with a printed device code instead of failing (the code must not reach a log)")
+	connectC.Flags().BoolVar(&connNonInteractive, "non-interactive", false, "never prompt; fail instead of asking")
 
 	var winDataRoot string
 	var winDaemonDryRun bool
@@ -218,6 +268,18 @@ Use --dry-run first to inspect host state and print the plan without elevation.`
 
 	root.AddCommand(run, doctorC, connectC, winDaemon, installContainerd, bakeCmd(), detectCmd(&cfgPath), screenshotCmd(), bootKeysCmd(), vmViewCmd(), jitISOCmd(), serviceCmd(&cfgPath))
 	return root
+}
+
+// changedManifestFlags reports which manifest-only connect flags the user
+// explicitly set, so the device path can reject them by name.
+func changedManifestFlags(cmd *cobra.Command) []string {
+	var set []string
+	for _, name := range manifestOnlyFlags {
+		if cmd.Flags().Changed(name) {
+			set = append(set, "--"+name)
+		}
+	}
+	return set
 }
 
 // bootKeysCmd is a hidden debug helper: reset a VM and spam Enter to get past
@@ -1006,7 +1068,7 @@ func doctor(configPath string) error {
 	// the repo list, since the checks visit repos in bounded waves and a fixed
 	// clock would fail a healthy config that merely lists many repos.
 	budget := remoteCheckBudget(len(cfg.GitHub.RepoTargets()))
-	for _, phase := range []func(context.Context, *config.Config) error{checkActionsEnabled, warnNoSelfHostedWorkflows} {
+	for _, phase := range []func(context.Context, *config.Config) error{checkRunnerAccess, checkActionsEnabled, warnNoSelfHostedWorkflows} {
 		phaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
 		err := phase(phaseCtx, cfg)
 		cancel()
@@ -1018,6 +1080,25 @@ func doctor(configPath string) error {
 		return fmt.Errorf("preflight found problems")
 	}
 	fmt.Println("\nall pools ready")
+	return nil
+}
+
+// checkRunnerAccess proves the configured credential can reach the runner-admin
+// API under org and enterprise scope. Repo scopes are covered by later checks.
+func checkRunnerAccess(ctx context.Context, cfg *config.Config) error {
+	if cfg.GitHub.Scope != config.ScopeOrg && cfg.GitHub.Scope != config.ScopeEnterprise {
+		return nil
+	}
+	target := cfg.GitHub.Owner
+	client, err := github.New(ctx, cfg.GitHub, cfg.Auth)
+	if err == nil {
+		err = client.CheckRunnerAccess(ctx)
+	}
+	if err != nil {
+		fmt.Printf("\n[%s] cannot reach the %s runner API: %v\n", target, cfg.GitHub.Scope, err)
+		return fmt.Errorf("%s runner access check failed", cfg.GitHub.Scope)
+	}
+	fmt.Printf("[%s] %s runner API reachable\n", target, cfg.GitHub.Scope)
 	return nil
 }
 
